@@ -1,0 +1,73 @@
+{
+  "initiated": true,
+  "holdsCount": 10,
+  "currentClimber": "",
+  "preparingClimber": "",
+  "started": false,
+  "timerState": "idle",
+  "holdCount": 0.0,
+  "routeIndex": 1,
+  "routesCount": 1,
+  "holdsCounts": [],
+  "competitors": [
+    {
+      "nume": "Ana",
+      "marked": true
+    },
+    {
+      "nume": "Bob",
+      "marked": true
+    }
+  ],
+  "categorie": "",
+  "lastRegisteredTime": 120.0,
+  "remaining": null,
+  "timerPreset": null,
+  "timerPresetSec": null,
+  "timerRemainingSec": null,
+  "timerEndsAtMs": null,
+  "timeCriterionEnabled": true,
+  "timeTiebreakPreference": null,
+  "timeTiebreakResolvedFingerprint": null,
+  "timeTiebreakResolvedDecision": null,
+  "timeTiebreakDecisions": {},
+  "prevRoundsTiebreakPreference": "yes",
+  "prevRoundsTiebreakResolvedFingerprint": "tb3:a5e9b6a24dbdcb4279470c43d2a3f89722eda20f",
+  "prevRoundsTiebreakResolvedDecision": "yes",
+  "prevRoundsTiebreakDecisions": {
+    "tb3:a5e9b6a24dbdcb4279470c43d2a3f89722eda20f": "yes"
+  },
+  "prevRoundsTiebreakOrders": {},
+  "prevRoundsTiebreakRanks": {
+    "tb3:a5e9b6a24dbdcb4279470c43d2a3f89722eda20f": {
+      "Ana": 1,
+      "Bob": 2
+    }
+  },
+  "prevRoundsTiebreakLineageRanks": {
+    "tb-lineage:fccc68a4c61f1a8da495511360fea9f1176516cc": {
+      "Ana": 1,
+      "Bob": 2
+    }
+  },
+  "sessionId": "9b8515a3-c8a9-43ab-9290-90eb166872da",
+  "boxVersion": 5,
+  "scores": {
+    "Ana": [
+      9.0
+    ],
+    "Bob": [
+      9.0
+    ]
+  },
+  "times": {
+    "Ana": [
+      110.0
+    ],
+    "Bob": [
+      120.0
+    ]
+  },
+  "leadTiebreakBadgesByName": {},
+  "leadTiebreakBadgesRouteIndex": 1
+}

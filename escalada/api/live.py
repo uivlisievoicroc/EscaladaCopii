@@ -34,6 +34,8 @@ from pydantic import BaseModel
 from starlette.websockets import WebSocket
 
 # -------------------- Local application imports --------------------
+# Canonical snapshot projections live in a dedicated module to avoid drift.
+from escalada.api import live_snapshot
 # Rate limiting is applied per box + per command type to keep the server responsive during events.
 from escalada.rate_limit import check_rate_limit
 # Core command validation + state transition logic (shared with other services).
@@ -61,7 +63,6 @@ from escalada.storage.json_store import (
     save_competition_officials,
     save_box_state,
 )
-from escalada.api.ranking_time_tiebreak import resolve_rankings_with_time_tiebreak
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +192,6 @@ def _apply_server_side_timer(state: dict, cmd_payload: dict, now_ms: int) -> Non
         return
 
     if cmd_type == "RESET_PARTIAL":
-        # RESET_PARTIAL allows selective reset of timer/progress/competitors.
-        # Sync timer state: reset remaining time to preset when timer is reset.
-        # Note: escalada-core handles timerState/holdCount/marked changes; this syncs derived fields.
         if cmd_payload.get("resetTimer") or cmd_payload.get("unmarkAll"):
             preset = state.get("timerPresetSec")
             state["timerRemainingSec"] = float(preset) if isinstance(preset, (int, float)) else None
@@ -330,7 +328,6 @@ class Cmd(BaseModel):
     prevRoundsTiebreakLineageKey: str | None = None
     prevRoundsTiebreakOrder: list[str] | None = None
     prevRoundsTiebreakRanksByName: dict[str, int] | None = None
-
     # for RESET_PARTIAL (checkbox-driven selective reset)
     resetTimer: bool | None = None
     clearProgress: bool | None = None
@@ -478,21 +475,7 @@ async def cmd(cmd: Cmd, request: Request = None, claims=Depends(require_box_acce
                 await _send_state_snapshot(cmd.boxId)
                 return {"status": "ok"}
 
-            # NOTE: For RESET_PARTIAL, we must forward the checkbox flags even if the upstream
-            # Cmd/ValidatedCmd schema doesn't include them (Pydantic would silently drop extras).
-            # We read them from the raw request body and merge into the dict we pass to `apply_command`.
-            cmd_dict = cmd.model_dump()
-            if cmd.type == "RESET_PARTIAL" and request is not None:
-                try:
-                    raw = await request.json()
-                    if isinstance(raw, dict):
-                        for k in ("resetTimer", "clearProgress", "unmarkAll"):
-                            if k in raw and isinstance(raw.get(k), bool):
-                                cmd_dict[k] = raw.get(k)
-                except Exception:
-                    pass
-
-            outcome = apply_command(sm, cmd_dict)
+            outcome = apply_command(sm, cmd.model_dump())
             cmd_payload = outcome.cmd_payload
             if _server_side_timer_enabled():
                 _apply_server_side_timer(sm, cmd_payload, _now_ms())
@@ -623,140 +606,19 @@ def _merge_persistent_tiebreak_badges(
     route_index: int,
     ranking_rows: list[dict] | None,
 ) -> list[dict]:
-    rows = ranking_rows if isinstance(ranking_rows, list) else []
-    if not rows:
-        state["leadTiebreakBadgesByName"] = {}
-        state["leadTiebreakBadgesRouteIndex"] = route_index
-        return []
-
-    initiated = bool(state.get("initiated"))
-    if not initiated:
-        state["leadTiebreakBadgesByName"] = {}
-        state["leadTiebreakBadgesRouteIndex"] = route_index
-        return rows
-
-    prev_route_index = state.get("leadTiebreakBadgesRouteIndex")
-    if prev_route_index != route_index:
-        state["leadTiebreakBadgesByName"] = {}
-        state["leadTiebreakBadgesRouteIndex"] = route_index
-
-    badges = state.get("leadTiebreakBadgesByName")
-    if not isinstance(badges, dict):
-        badges = {}
-
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = row.get("name")
-        if not isinstance(name, str) or not name.strip():
-            continue
-        prev_flags = badges.get(name) if isinstance(badges.get(name), dict) else {}
-        next_prev = bool(prev_flags.get("tb_prev")) or bool(row.get("tb_prev"))
-        next_time = bool(prev_flags.get("tb_time")) or bool(row.get("tb_time"))
-        if next_prev or next_time:
-            badges[name] = {"tb_prev": next_prev, "tb_time": next_time}
-
-    merged_rows: list[dict] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        merged = dict(row)
-        name = merged.get("name")
-        if isinstance(name, str):
-            flags = badges.get(name) if isinstance(badges.get(name), dict) else {}
-            if bool(flags.get("tb_prev")):
-                merged["tb_prev"] = True
-            if bool(flags.get("tb_time")):
-                merged["tb_time"] = True
-        merged_rows.append(merged)
-
-    state["leadTiebreakBadgesByName"] = badges
-    state["leadTiebreakBadgesRouteIndex"] = route_index
-    return merged_rows
+    """Backward-compatible export for tests/importers."""
+    return live_snapshot.merge_persistent_tiebreak_badges(state, route_index, ranking_rows)
 
 
 def _build_public_box_state(box_id: int, state: dict) -> dict:
-    """
-    Build the read-only state shape sent to the public hub/WS.
-
-    This is a reduced projection of the internal box state:
-    - does NOT expose the full competitor list (privacy + payload size)
-    - includes enough information for Live Rankings / Live Climbing tiles
-    - computes `remaining` from the authoritative server timer when enabled
-    """
-    routes_count = state.get("routesCount")
-    if routes_count is None:
-        routes_count = state.get("routeIndex") or 1
-    holds_counts = state.get("holdsCounts") or []
-    if not isinstance(holds_counts, list):
-        holds_counts = []
-    remaining = state.get("remaining")
-    if _server_side_timer_enabled():
-        remaining = _compute_remaining(state, _now_ms())
-    route_index = int(state.get("routeIndex") or 1)
-    routes_count = int(routes_count or route_index or 1)
-    scores_by_name = state.get("scores") or {}
-    times_by_name = state.get("times") or {}
-    tiebreak_state = resolve_rankings_with_time_tiebreak(
-        scores=scores_by_name,
-        times=times_by_name,
-        route_count=routes_count,
-        active_route_index=route_index,
-        box_id=box_id,
-        time_criterion_enabled=bool(state.get("timeCriterionEnabled", False)),
-        active_holds_count=state.get("holdsCount")
-        if isinstance(state.get("holdsCount"), int)
-        else None,
-        prev_resolved_decisions=state.get("prevRoundsTiebreakDecisions"),
-        prev_orders_by_fingerprint=state.get("prevRoundsTiebreakOrders"),
-        prev_ranks_by_fingerprint=state.get("prevRoundsTiebreakRanks"),
-        prev_lineage_ranks_by_key=state.get("prevRoundsTiebreakLineageRanks"),
-        prev_resolved_fingerprint=state.get("prevRoundsTiebreakResolvedFingerprint"),
-        prev_resolved_decision=state.get("prevRoundsTiebreakResolvedDecision"),
-        resolved_decisions=state.get("timeTiebreakDecisions"),
-        resolved_fingerprint=state.get("timeTiebreakResolvedFingerprint"),
-        resolved_decision=state.get("timeTiebreakResolvedDecision"),
-    )
-    merged_lead_rows = _merge_persistent_tiebreak_badges(
+    """Build public box payload via canonical snapshot builder."""
+    return live_snapshot.build_public_box_state(
+        box_id,
         state,
-        route_index,
-        tiebreak_state.get("lead_ranking_rows") or [],
+        server_side_timer_enabled=_server_side_timer_enabled(),
+        compute_remaining=_compute_remaining,
+        now_ms=_now_ms,
     )
-    return {
-        "boxId": box_id,
-        "categorie": state.get("categorie", ""),
-        "initiated": state.get("initiated", False),
-        "routeIndex": state.get("routeIndex", 1),
-        "routesCount": routes_count,
-        "holdsCount": state.get("holdsCount", 0),
-        "holdsCounts": holds_counts,
-        "currentClimber": state.get("currentClimber", ""),
-        "preparingClimber": (state.get("preparingClimber") or _public_preparing_climber(state)),
-        "timerState": state.get("timerState", "idle"),
-        "remaining": remaining,
-        "timeCriterionEnabled": state.get("timeCriterionEnabled", False),
-        "timeTiebreakPreference": state.get("timeTiebreakPreference"),
-        "timeTiebreakDecisions": state.get("timeTiebreakDecisions") or {},
-        "timeTiebreakResolvedFingerprint": state.get("timeTiebreakResolvedFingerprint"),
-        "timeTiebreakResolvedDecision": state.get("timeTiebreakResolvedDecision"),
-        "prevRoundsTiebreakPreference": state.get("prevRoundsTiebreakPreference"),
-        "prevRoundsTiebreakDecisions": state.get("prevRoundsTiebreakDecisions") or {},
-        "prevRoundsTiebreakOrders": state.get("prevRoundsTiebreakOrders") or {},
-        "prevRoundsTiebreakRanks": state.get("prevRoundsTiebreakRanks") or {},
-        "prevRoundsTiebreakLineageRanks": state.get("prevRoundsTiebreakLineageRanks") or {},
-        "prevRoundsTiebreakResolvedFingerprint": state.get("prevRoundsTiebreakResolvedFingerprint"),
-        "prevRoundsTiebreakResolvedDecision": state.get("prevRoundsTiebreakResolvedDecision"),
-        "timeTiebreakCurrentFingerprint": tiebreak_state.get("fingerprint"),
-        "timeTiebreakHasEligibleTie": tiebreak_state.get("has_eligible_tie"),
-        "timeTiebreakIsResolved": tiebreak_state.get("is_resolved"),
-        "timeTiebreakEligibleGroups": tiebreak_state.get("eligible_groups") or [],
-        "leadRankingRows": merged_lead_rows,
-        "leadTieEvents": tiebreak_state.get("lead_tie_events") or [],
-        "leadRankingResolved": tiebreak_state.get("lead_ranking_resolved"),
-        "leadRankingErrors": tiebreak_state.get("errors") or [],
-        "scoresByName": scores_by_name,
-        "timesByName": times_by_name,
-    }
 
 async def _broadcast_public(payload: dict) -> None:
     """
@@ -1088,94 +950,15 @@ async def get_state(box_id: int, claims=Depends(require_view_box_access())):
 
 # helpers
 def _build_snapshot(box_id: int, state: dict) -> dict:
-    """
-    Build the full state snapshot sent to authenticated clients.
-
-    Includes internal fields required by ControlPanel/ContestPage/JudgePage:
-    - competitors list + current flow fields
-    - timer/preset data
-    - global competition officials
-    """
-    remaining = state.get("remaining")
-    if _server_side_timer_enabled():
-        remaining = _compute_remaining(state, _now_ms())
-    route_index = int(state.get("routeIndex") or 1)
-    routes_count = int(state.get("routesCount") or route_index or 1)
-    scores_by_name = state.get("scores") or {}
-    times_by_name = state.get("times") or {}
-    tiebreak_state = resolve_rankings_with_time_tiebreak(
-        scores=scores_by_name,
-        times=times_by_name,
-        route_count=routes_count,
-        active_route_index=route_index,
-        box_id=box_id,
-        time_criterion_enabled=bool(state.get("timeCriterionEnabled", False)),
-        active_holds_count=state.get("holdsCount")
-        if isinstance(state.get("holdsCount"), int)
-        else None,
-        prev_resolved_decisions=state.get("prevRoundsTiebreakDecisions"),
-        prev_orders_by_fingerprint=state.get("prevRoundsTiebreakOrders"),
-        prev_ranks_by_fingerprint=state.get("prevRoundsTiebreakRanks"),
-        prev_lineage_ranks_by_key=state.get("prevRoundsTiebreakLineageRanks"),
-        prev_resolved_fingerprint=state.get("prevRoundsTiebreakResolvedFingerprint"),
-        prev_resolved_decision=state.get("prevRoundsTiebreakResolvedDecision"),
-        resolved_decisions=state.get("timeTiebreakDecisions"),
-        resolved_fingerprint=state.get("timeTiebreakResolvedFingerprint"),
-        resolved_decision=state.get("timeTiebreakResolvedDecision"),
-    )
-    merged_lead_rows = _merge_persistent_tiebreak_badges(
+    """Build private snapshot payload via canonical snapshot builder."""
+    return live_snapshot.build_snapshot(
+        box_id,
         state,
-        route_index,
-        tiebreak_state.get("lead_ranking_rows") or [],
+        server_side_timer_enabled=_server_side_timer_enabled(),
+        compute_remaining=_compute_remaining,
+        now_ms=_now_ms,
+        get_competition_officials=get_competition_officials,
     )
-    officials = get_competition_officials()
-    return {
-        "type": "STATE_SNAPSHOT",
-        "boxId": box_id,
-        "initiated": state.get("initiated", False),
-        "holdsCount": state.get("holdsCount", 0),
-        "routeIndex": state.get("routeIndex", 1),
-        "routesCount": state.get("routesCount"),
-        "holdsCounts": state.get("holdsCounts"),
-        "currentClimber": state.get("currentClimber", ""),
-        "preparingClimber": state.get("preparingClimber", ""),
-        "started": state.get("started", False),
-        "timerState": state.get("timerState", "idle"),
-        "holdCount": state.get("holdCount", 0.0),
-        "competitors": state.get("competitors", []),
-        "categorie": state.get("categorie", ""),
-        "registeredTime": state.get("lastRegisteredTime"),
-        "remaining": remaining,
-        "timeCriterionEnabled": state.get("timeCriterionEnabled", False),
-        "timeTiebreakPreference": state.get("timeTiebreakPreference"),
-        "timeTiebreakDecisions": state.get("timeTiebreakDecisions") or {},
-        "timeTiebreakResolvedFingerprint": state.get("timeTiebreakResolvedFingerprint"),
-        "timeTiebreakResolvedDecision": state.get("timeTiebreakResolvedDecision"),
-        "prevRoundsTiebreakPreference": state.get("prevRoundsTiebreakPreference"),
-        "prevRoundsTiebreakDecisions": state.get("prevRoundsTiebreakDecisions") or {},
-        "prevRoundsTiebreakOrders": state.get("prevRoundsTiebreakOrders") or {},
-        "prevRoundsTiebreakRanks": state.get("prevRoundsTiebreakRanks") or {},
-        "prevRoundsTiebreakLineageRanks": state.get("prevRoundsTiebreakLineageRanks") or {},
-        "prevRoundsTiebreakResolvedFingerprint": state.get("prevRoundsTiebreakResolvedFingerprint"),
-        "prevRoundsTiebreakResolvedDecision": state.get("prevRoundsTiebreakResolvedDecision"),
-        "timeTiebreakCurrentFingerprint": tiebreak_state.get("fingerprint"),
-        "timeTiebreakHasEligibleTie": tiebreak_state.get("has_eligible_tie"),
-        "timeTiebreakIsResolved": tiebreak_state.get("is_resolved"),
-        "timeTiebreakEligibleGroups": tiebreak_state.get("eligible_groups") or [],
-        "leadRankingRows": merged_lead_rows,
-        "leadTieEvents": tiebreak_state.get("lead_tie_events") or [],
-        "leadRankingResolved": tiebreak_state.get("lead_ranking_resolved"),
-        "leadRankingErrors": tiebreak_state.get("errors") or [],
-        "scoresByName": scores_by_name,
-        "timesByName": times_by_name,
-        "timerPreset": state.get("timerPreset"),
-        "timerPresetSec": state.get("timerPresetSec"),
-        "judgeChief": officials.get("judgeChief", ""),
-        "competitionDirector": officials.get("competitionDirector", ""),
-        "chiefRoutesetter": officials.get("chiefRoutesetter", ""),
-        "sessionId": state.get("sessionId"),  # Include session ID for client validation
-        "boxVersion": state.get("boxVersion", 0),
-    }
 
 async def _send_state_snapshot(box_id: int, targets: set[WebSocket] | None = None):
     """

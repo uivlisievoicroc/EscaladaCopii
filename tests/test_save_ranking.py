@@ -143,6 +143,25 @@ class BuildRankingDataTest(unittest.TestCase):
         self.assertIsNotNone(df)
         self.assertEqual(len(df), 3)  # All competitors present
 
+    def test_missing_route_uses_last_place_penalty_not_n_plus_one(self):
+        from escalada.api.save_ranking import _build_overall_df, RankingIn
+
+        payload = RankingIn(
+            categorie="Test",
+            route_count=2,
+            scores={
+                "Alice": [100, 90],
+                "Bob": [80],      # Missing route 2
+                "Charlie": [70, 85],
+            },
+            clubs={},
+        )
+
+        df = _build_overall_df(payload)
+        by_name = {row["Nume"]: row for _, row in df.iterrows()}
+        # Bob route ranks are 2 and 3 (last place), GM = sqrt(6)
+        self.assertTrue(math.isclose(by_name["Bob"]["Total"], math.sqrt(6), abs_tol=1e-3))
+
     def test_ranking_single_route(self):
         """Test ranking with only one route"""
         from escalada.api.save_ranking import _build_overall_df, RankingIn

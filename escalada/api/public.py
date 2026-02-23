@@ -66,6 +66,10 @@ from pydantic import BaseModel
 from starlette.websockets import WebSocket
 
 from escalada.auth.service import create_access_token, decode_token
+from escalada.api.live_ws import (
+    broadcast_to_box as broadcast_ws_box,
+    heartbeat as run_heartbeat,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -360,27 +364,14 @@ async def broadcast_to_public_box(box_id: int, payload: dict) -> None:
         box_id: Box identifier to broadcast to
         payload: State snapshot dict (will be JSON-serialized)
     """
-    # Snapshot WebSocket set inside lock (prevents concurrent modification)
-    async with public_box_channels_lock:
-        sockets = list(public_box_channels.get(box_id, set()))  # Convert set to list for iteration
-
-    # Broadcast to all sockets (outside lock to reduce contention)
-    dead = []  # Track failed sends for cleanup
-    for ws in sockets:
-        try:
-            # Send JSON payload to WebSocket (ensure_ascii=False preserves Romanian chars)
-            await ws.send_text(json.dumps(payload, ensure_ascii=False))
-        except Exception as e:
-            # Connection closed or network error (log at debug level, not error)
-            logger.debug(f"Public box broadcast error: {e}")
-            dead.append(ws)  # Mark for removal from registry
-
-    # Remove dead connections from registry (if any failures)
-    if dead:
-        async with public_box_channels_lock:
-            channel = public_box_channels.get(box_id, set())
-            for ws in dead:
-                channel.discard(ws)  # Safe even if already removed
+    await broadcast_ws_box(
+        box_id,
+        payload,
+        channels=public_box_channels,
+        channels_lock=public_box_channels_lock,
+        logger=logger,
+        timeout_sec=5.0,
+    )
 
 
 async def _heartbeat(ws: WebSocket, box_id: int, last_pong: dict) -> None:
@@ -420,27 +411,15 @@ async def _heartbeat(ws: WebSocket, box_id: int, last_pong: dict) -> None:
     Raises:
         asyncio.CancelledError: When task cancelled by main loop (caught and suppressed)
     """
-    try:
-        while True:
-            # Wait 30 seconds between PINGs
-            await asyncio.sleep(30)
-            
-            try:
-                # Send PING to client (expects PONG response)
-                await ws.send_text(json.dumps({"type": "PING"}))
-            except Exception:
-                # Send failed (connection closed) → exit loop
-                break
-            
-            # Check if client responded to recent PINGs
-            now = asyncio.get_event_loop().time()  # Current timestamp (monotonic)
-            if now - last_pong["ts"] > 90:  # No PONG in 90s (3 missed PINGs)
-                logger.warning(f"Public WS box {box_id}: no PONG in 90s, closing")
-                break  # Exit loop → main loop closes WebSocket
-                
-    except asyncio.CancelledError:
-        # Task cancelled by main loop (normal shutdown on disconnect)
-        pass  # Suppress error, let finally block in main loop handle cleanup
+    await run_heartbeat(
+        ws,
+        box_id,
+        last_pong,
+        logger=logger,
+        interval_sec=30,
+        timeout_sec=90,
+        include_timestamp=False,
+    )
 
 
 @router.websocket("/ws/{box_id}")
