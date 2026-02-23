@@ -724,8 +724,10 @@ const JudgePage: FC = () => {
       typeof timerSeconds === 'number'
         ? timerSeconds
         : parseInt(safeGetItem(`timer-${idx}`) || '', 10);
-    if (typeof snapshot.remaining === 'number') return snapshot.remaining;
-    return Number.isNaN(fallback) ? null : fallback;
+    if (typeof snapshot.remaining === 'number' && Number.isFinite(snapshot.remaining)) {
+      return Math.max(0, Math.ceil(snapshot.remaining));
+    }
+    return Number.isNaN(fallback) ? null : Math.max(0, Math.ceil(fallback));
   };
 
   // Shared helper for START/STOP/RESUME actions.
@@ -1180,7 +1182,7 @@ const JudgePage: FC = () => {
                     } else {
                       const current = await resolveRemainingSeconds();
                       if (current != null && !Number.isNaN(current)) {
-                        const elapsed = Math.max(0, totalDurationSec() - current);
+                        const elapsed = Math.max(0, Math.trunc(totalDurationSec() - current));
                         timeToSend = elapsed;
                         try {
                           safeSetItem(`registeredTime-${idx}`, elapsed.toString());

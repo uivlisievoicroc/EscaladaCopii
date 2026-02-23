@@ -37,11 +37,12 @@ const ModalScore = (props) => {
 
   // Format a server-provided time value (seconds) as mm:ss for display in the header.
   const formatTime = (sec) => {
-    if (typeof sec !== 'number' || Number.isNaN(sec)) return '';
-    const m = Math.floor(sec / 60)
+    if (!Number.isFinite(sec) || sec < 0) return '';
+    const total = Math.trunc(sec);
+    const m = Math.floor(total / 60)
       .toString()
       .padStart(2, '0');
-    const s = (sec % 60).toString().padStart(2, '0');
+    const s = (total % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
   };
 

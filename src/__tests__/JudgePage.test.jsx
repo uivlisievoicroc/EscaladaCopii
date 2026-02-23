@@ -32,15 +32,17 @@ describe('JudgePage - Helper Functions & Logic', () => {
 
     it('formats seconds to mm:ss correctly', () => {
       const formatTime = (sec) => {
-        if (sec === null || sec === undefined) return '--:--';
-        const m = Math.floor(sec / 60);
-        const s = sec % 60;
+        if (!Number.isFinite(sec) || sec < 0) return '--:--';
+        const total = Math.trunc(sec);
+        const m = Math.floor(total / 60);
+        const s = total % 60;
         return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
       };
 
       expect(formatTime(300)).toBe('05:00');
       expect(formatTime(270)).toBe('04:30');
       expect(formatTime(45)).toBe('00:45');
+      expect(formatTime(125.7)).toBe('02:05');
       expect(formatTime(0)).toBe('00:00');
       expect(formatTime(null)).toBe('--:--');
       expect(formatTime(undefined)).toBe('--:--');
