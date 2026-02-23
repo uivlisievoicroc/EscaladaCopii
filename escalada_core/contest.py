@@ -36,6 +36,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
+from .commands.init_route import apply_init_route
+from .commands.reset import apply_reset_box, apply_reset_partial
+from .commands.submit_score import apply_submit_score
+from .commands.timer import apply_timer_and_progress
 from .validation import InputSanitizer
 
 
@@ -324,199 +328,35 @@ def _apply_transition(state: Dict[str, Any], cmd: Dict[str, Any]) -> CommandOutc
     payload = dict(cmd)
 
     if ctype == "INIT_ROUTE":
-        new_state["boxVersion"] = new_state.get("boxVersion", 0) + 1
-        payload["sessionId"] = new_state.get("sessionId")
-        new_state["initiated"] = True
-        incoming_route_index = cmd.get("routeIndex") or 1
-        new_state["holdsCount"] = cmd.get("holdsCount") or 0
-        new_state["routeIndex"] = incoming_route_index
-        if cmd.get("routesCount") is not None:
-            new_state["routesCount"] = cmd.get("routesCount")
-        if cmd.get("holdsCounts") is not None:
-            new_state["holdsCounts"] = cmd.get("holdsCounts")
-
-        competitors = _normalize_competitors(cmd.get("competitors"))
-        new_state["competitors"] = competitors
-        new_state["currentClimber"] = competitors[0]["nume"] if competitors else ""
-        new_state["preparingClimber"] = (
-            competitors[1]["nume"] if len(competitors) > 1 else ""
+        apply_init_route(
+            new_state,
+            cmd,
+            payload,
+            normalize_competitors=_normalize_competitors,
+            parse_timer_preset=parse_timer_preset,
         )
-
-        new_state["started"] = False
-        new_state["timerState"] = "idle"
-        new_state["holdCount"] = 0.0
-        new_state["lastRegisteredTime"] = None
-        new_state["remaining"] = None
-        # Tiebreak memory is route-scoped; starting/restarting a route resets it.
-        new_state["timeTiebreakDecisions"] = {}
-        new_state["timeTiebreakResolvedFingerprint"] = None
-        new_state["timeTiebreakResolvedDecision"] = None
-        new_state["prevRoundsTiebreakDecisions"] = {}
-        new_state["prevRoundsTiebreakOrders"] = {}
-        new_state["prevRoundsTiebreakRanks"] = {}
-        new_state["prevRoundsTiebreakLineageRanks"] = {}
-        new_state["prevRoundsTiebreakResolvedFingerprint"] = None
-        new_state["prevRoundsTiebreakResolvedDecision"] = None
-        # Score preservation logic for multi-route contests:
-        # - routeIndex == 1: Fresh contest start, clear all scores/times
-        # - routeIndex > 1: Preserve scores/times from previous routes (arrays indexed by route)
-        # This allows contestants to accumulate scores across multiple routes (e.g., 3 routes → 3 scores per competitor)
-        if incoming_route_index == 1:
-            new_state["scores"] = {}
-            new_state["times"] = {}
-        else:
-            if not isinstance(new_state.get("scores"), dict):
-                new_state["scores"] = {}
-            if not isinstance(new_state.get("times"), dict):
-                new_state["times"] = {}
-
-        if cmd.get("categorie"):
-            new_state["categorie"] = cmd["categorie"]
-        if cmd.get("timerPreset"):
-            new_state["timerPreset"] = cmd["timerPreset"]
-            new_state["timerPresetSec"] = parse_timer_preset(cmd.get("timerPreset"))
-
         snapshot_required = True
 
-    elif ctype == "START_TIMER":
-        new_state["started"] = True
-        new_state["timerState"] = "running"
-        new_state["lastRegisteredTime"] = None
-        new_state["remaining"] = None
-        snapshot_required = True
-
-    elif ctype == "STOP_TIMER":
-        new_state["started"] = False
-        new_state["timerState"] = "paused"
-        snapshot_required = True
-
-    elif ctype == "RESUME_TIMER":
-        new_state["started"] = True
-        new_state["timerState"] = "running"
-        new_state["lastRegisteredTime"] = None
-        snapshot_required = True
-
-    elif ctype == "PROGRESS_UPDATE":
-        # Increment hold count by delta (1 for full hold, 0.1 for half-hold bonus)
-        delta = cmd.get("delta") or 1
-        # Integer path for +1 (common case), float path for fractional increments
-        new_count = (
-            (int(new_state.get("holdCount", 0)) + 1)
-            if delta == 1
-            else round(new_state.get("holdCount", 0) + delta, 1)
+    else:
+        handled_timer, timer_snapshot = apply_timer_and_progress(
+            new_state,
+            cmd,
+            ctype,
+            coerce_optional_time=_coerce_optional_time,
+            parse_timer_preset=parse_timer_preset,
         )
-        # Clamp to valid range [0, holdsCount]
-        if new_count < 0:
-            new_count = 0.0
-        max_holds = new_state.get("holdsCount") or 0
-        if isinstance(max_holds, int) and max_holds > 0 and new_count > max_holds:
-            new_count = float(max_holds)
-        new_state["holdCount"] = new_count
-        snapshot_required = True
+        if handled_timer:
+            snapshot_required = timer_snapshot
 
-    elif ctype == "REGISTER_TIME":
-        if "registeredTime" in cmd:
-            candidate = _coerce_optional_time(cmd.get("registeredTime"))
-            if candidate is not None:
-                new_state["lastRegisteredTime"] = candidate
-        snapshot_required = True
-
-    elif ctype == "TIMER_SYNC":
-        new_state["remaining"] = cmd.get("remaining")
-
-    elif ctype == "SET_TIMER_PRESET":
-        preset = cmd.get("timerPreset")
-        if preset is not None:
-            new_state["timerPreset"] = preset
-            new_state["timerPresetSec"] = parse_timer_preset(preset)
-            # Legacy (client-driven timer): if timer isn't actively in use, reflect preset immediately.
-            timer_state = new_state.get("timerState") or "idle"
-            if timer_state not in {"running", "paused"}:
-                preset_sec = new_state.get("timerPresetSec")
-                new_state["remaining"] = float(preset_sec) if isinstance(preset_sec, int) else None
-        snapshot_required = True
-
-    elif ctype == "SUBMIT_SCORE":
-        # Resolve registeredTime: use command value if present, else fall back to lastRegisteredTime
-        raw_time = cmd.get("registeredTime")
-        if raw_time is None:
-            raw_time = new_state.get("lastRegisteredTime")
-        effective_time = _coerce_optional_time(raw_time)
-        payload["registeredTime"] = effective_time
-
-        # Competitor resolution: support both 'idx' (legacy) and 'competitorIdx' (new) for backward compat
-        competitors = new_state.get("competitors") or []
-        idx = None
-        if "idx" in cmd:
-            raw_idx = cmd.get("idx")
-            if raw_idx not in (None, ""):
-                idx = _coerce_idx(raw_idx)
-                if idx is None:
-                    raise ValueError("SUBMIT_SCORE idx must be an int or numeric string")
-        elif "competitorIdx" in cmd:
-            raw_idx = cmd.get("competitorIdx")
-            if raw_idx not in (None, ""):
-                idx = _coerce_idx(raw_idx)
-                if idx is None:
-                    raise ValueError(
-                        "SUBMIT_SCORE competitorIdx must be an int or numeric string"
-                    )
-
-        competitor_name = cmd.get("competitor")
-        if idx is not None:
-            if idx < 0 or idx >= len(competitors):
-                raise ValueError("SUBMIT_SCORE idx out of range")
-            comp = competitors[idx]
-            if not isinstance(comp, dict):
-                raise ValueError("SUBMIT_SCORE idx refers to invalid competitor")
-            resolved_name = comp.get("nume")
-            if not isinstance(resolved_name, str) or not resolved_name.strip():
-                raise ValueError("SUBMIT_SCORE idx refers to invalid competitor")
-            competitor_name = resolved_name
-            payload["competitor"] = competitor_name
-
-        active_name = new_state.get("currentClimber") or ""
-        route_idx = max((new_state.get("routeIndex") or 1) - 1, 0)
-        if competitor_name:
-            scores = new_state.get("scores") or {}
-            times = new_state.get("times") or {}
-            if cmd.get("score") is not None:
-                arr = scores.get(competitor_name) or []
-                while len(arr) <= route_idx:
-                    arr.append(None)
-                arr[route_idx] = cmd.get("score")
-                scores[competitor_name] = arr
-            if effective_time is not None:
-                tarr = times.get(competitor_name) or []
-                while len(tarr) <= route_idx:
-                    tarr.append(None)
-                tarr[route_idx] = effective_time
-                times[competitor_name] = tarr
-            new_state["scores"] = scores
-            new_state["times"] = times
-
-        new_state["started"] = False
-        new_state["timerState"] = "idle"
-        new_state["holdCount"] = 0.0
-        new_state["lastRegisteredTime"] = effective_time
-        new_state["remaining"] = None
-
-        if competitors:
-            # Mark the scored competitor as done (prevents re-queuing)
-            for comp in competitors:
-                if not isinstance(comp, dict):
-                    continue
-                if comp.get("nume") == competitor_name:
-                    comp["marked"] = True
-                    break
-            # Queue advancement logic: only advance to next competitor when scoring the currently active one
-            # This allows admins to retrospectively fix scores for previous competitors without breaking queue order
-            if competitor_name and competitor_name == active_name:
-                next_active = _compute_preparing_climber(competitors, active_name)
-                new_state["currentClimber"] = next_active
-            new_state["preparingClimber"] = _compute_preparing_climber(
-                competitors, new_state.get("currentClimber") or ""
-            )
+    if ctype == "SUBMIT_SCORE":
+        apply_submit_score(
+            new_state,
+            cmd,
+            payload,
+            coerce_optional_time=_coerce_optional_time,
+            coerce_idx=_coerce_idx,
+            compute_preparing_climber=_compute_preparing_climber,
+        )
         snapshot_required = True
 
     elif ctype == "SET_TIME_CRITERION":
@@ -650,108 +490,11 @@ def _apply_transition(state: Dict[str, Any], cmd: Dict[str, Any]) -> CommandOutc
         snapshot_required = True
 
     elif ctype == "RESET_PARTIAL":
-        # Selective reset: allows admin to reset specific aspects without full RESET_BOX
-        reset_timer = bool(cmd.get("resetTimer"))
-        clear_progress = bool(cmd.get("clearProgress"))
-        unmark_all = bool(cmd.get("unmarkAll"))
-
-        # Cascade rule: unmark_all implies reset_timer + clear_progress
-        # Rationale: restarting competition from scratch requires clean state (no timer running, no holds counted)
-        if unmark_all:
-            reset_timer = True
-            clear_progress = True
-
-            # "Restart from first" should bring the box back to the *pre-init* state:
-            # - the operator must press INIT_ROUTE again to (re)start the route flow
-            # - stale Judge tabs must not be able to continue sending commands
-            import uuid
-
-            new_state["initiated"] = False
-            new_state["sessionId"] = str(uuid.uuid4())
-            new_state["routeIndex"] = 1
-            holds_counts = new_state.get("holdsCounts")
-            if isinstance(holds_counts, list) and holds_counts:
-                first_holds = holds_counts[0]
-                if isinstance(first_holds, int):
-                    new_state["holdsCount"] = first_holds
-
-            new_state["scores"] = {}
-            new_state["times"] = {}
-            new_state["lastRegisteredTime"] = None
-            new_state["timeTiebreakDecisions"] = {}
-            new_state["timeTiebreakResolvedFingerprint"] = None
-            new_state["timeTiebreakResolvedDecision"] = None
-            new_state["prevRoundsTiebreakDecisions"] = {}
-            new_state["prevRoundsTiebreakOrders"] = {}
-            new_state["prevRoundsTiebreakRanks"] = {}
-            new_state["prevRoundsTiebreakLineageRanks"] = {}
-            new_state["prevRoundsTiebreakResolvedFingerprint"] = None
-            new_state["prevRoundsTiebreakResolvedDecision"] = None
-
-            competitors = new_state.get("competitors")
-            if isinstance(competitors, list):
-                for comp in competitors:
-                    if not isinstance(comp, dict):
-                        continue
-                    comp["marked"] = False
-                # Pre-init state does not have an active queue/climber.
-                new_state["currentClimber"] = ""
-                new_state["preparingClimber"] = ""
-            else:
-                new_state["currentClimber"] = ""
-                new_state["preparingClimber"] = ""
-
-        if reset_timer:
-            new_state["started"] = False
-            new_state["timerState"] = "idle"
-            # Reset remaining time back to the full preset.
-            # This must work even if the timer was running (stop first, then reset),
-            # and even in legacy mode where the backend doesn't compute `remaining`.
-            preset_sec = new_state.get("timerPresetSec")
-            if preset_sec is None:
-                preset_sec = parse_timer_preset(new_state.get("timerPreset"))
-            new_state["remaining"] = (
-                float(preset_sec) if isinstance(preset_sec, (int, float)) else None
-            )
-            # Resetting the timer for the current attempt also clears any pending/registered time tiebreak value.
-            new_state["lastRegisteredTime"] = None
-
-        if clear_progress:
-            new_state["holdCount"] = 0.0
-
+        apply_reset_partial(new_state, cmd, parse_timer_preset=parse_timer_preset)
         snapshot_required = True
 
     elif ctype == "RESET_BOX":
-        import uuid
-
-        new_state["initiated"] = False
-        new_state["currentClimber"] = ""
-        new_state["preparingClimber"] = ""
-        new_state["started"] = False
-        new_state["timerState"] = "idle"
-        new_state["holdCount"] = 0.0
-        new_state["lastRegisteredTime"] = None
-        new_state["remaining"] = None
-        new_state["scores"] = {}
-        new_state["times"] = {}
-        new_state["routesCount"] = 1
-        new_state["holdsCounts"] = []
-        new_state["competitors"] = []
-        new_state["categorie"] = ""
-        new_state["timerPreset"] = None
-        new_state["timerPresetSec"] = None
-        new_state["timeTiebreakPreference"] = None
-        new_state["timeTiebreakResolvedFingerprint"] = None
-        new_state["timeTiebreakResolvedDecision"] = None
-        new_state["timeTiebreakDecisions"] = {}
-        new_state["prevRoundsTiebreakPreference"] = None
-        new_state["prevRoundsTiebreakResolvedFingerprint"] = None
-        new_state["prevRoundsTiebreakResolvedDecision"] = None
-        new_state["prevRoundsTiebreakDecisions"] = {}
-        new_state["prevRoundsTiebreakOrders"] = {}
-        new_state["prevRoundsTiebreakRanks"] = {}
-        new_state["prevRoundsTiebreakLineageRanks"] = {}
-        new_state["sessionId"] = str(uuid.uuid4())
+        apply_reset_box(new_state)
         snapshot_required = True
 
     return CommandOutcome(
