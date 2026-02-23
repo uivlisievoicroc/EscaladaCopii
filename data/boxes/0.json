@@ -1,5 +1,5 @@
 {
-  "initiated": true,
+  "initiated": false,
   "holdsCount": 11,
   "currentClimber": "",
   "preparingClimber": "",
@@ -8,117 +8,55 @@
   "holdCount": 0.0,
   "routeIndex": 1,
   "routesCount": 1,
-  "holdsCounts": [
-    11
-  ],
-  "competitors": [
-    {
-      "nume": "Cireap Paul",
-      "marked": true,
-      "club": "One Move"
-    },
-    {
-      "nume": "Leonte Matei",
-      "marked": true,
-      "club": "A.C Repedea"
-    },
-    {
-      "nume": "Alexandru Radu",
-      "marked": true,
-      "club": "Știința Politehnica"
-    },
-    {
-      "nume": "Nicolici Radu",
-      "marked": true,
-      "club": "One Move"
-    }
-  ],
-  "categorie": "1",
-  "lastRegisteredTime": 25.0,
-  "remaining": 180.0,
-  "timerPreset": "03:00",
-  "timerPresetSec": 180,
-  "timerRemainingSec": 180.0,
+  "holdsCounts": [],
+  "competitors": [],
+  "categorie": "",
+  "lastRegisteredTime": null,
+  "remaining": null,
+  "timerPreset": null,
+  "timerPresetSec": null,
+  "timerRemainingSec": null,
   "timerEndsAtMs": null,
   "timeCriterionEnabled": true,
-  "timeTiebreakPreference": "yes",
-  "timeTiebreakResolvedFingerprint": "tb3:2c1597f8706bd3348d90a3012b7dcfed05843503",
-  "timeTiebreakResolvedDecision": "yes",
-  "timeTiebreakDecisions": {
-    "tb3:2c1597f8706bd3348d90a3012b7dcfed05843503": "yes"
-  },
-  "prevRoundsTiebreakPreference": "yes",
-  "prevRoundsTiebreakResolvedFingerprint": "tb3:a9bb46f69fae809cca98aee594fda5fc53e76052",
-  "prevRoundsTiebreakResolvedDecision": "yes",
-  "prevRoundsTiebreakDecisions": {
-    "tb3:85fd14587d315bd5fcee948da11560d0ecfba7a3": "yes",
-    "tb3:a9bb46f69fae809cca98aee594fda5fc53e76052": "yes"
-  },
+  "timeTiebreakPreference": null,
+  "timeTiebreakResolvedFingerprint": null,
+  "timeTiebreakResolvedDecision": null,
+  "timeTiebreakDecisions": {},
+  "prevRoundsTiebreakPreference": null,
+  "prevRoundsTiebreakResolvedFingerprint": null,
+  "prevRoundsTiebreakResolvedDecision": null,
+  "prevRoundsTiebreakDecisions": {},
   "prevRoundsTiebreakOrders": {},
-  "prevRoundsTiebreakRanks": {
-    "tb3:85fd14587d315bd5fcee948da11560d0ecfba7a3": {
-      "Alexandru Radu": 3,
-      "Leonte Matei": 2
-    },
-    "tb3:a9bb46f69fae809cca98aee594fda5fc53e76052": {
-      "Nicolici Radu": 3
-    }
-  },
-  "prevRoundsTiebreakLineageRanks": {
-    "tb-lineage:fccc68a4c61f1a8da495511360fea9f1176516cc": {
-      "Alexandru Radu": 3,
-      "Leonte Matei": 2,
-      "Nicolici Radu": 3
-    }
-  },
-  "sessionId": "e7a9f64a-bc75-4534-b87e-e8bf410ee3b1",
-  "boxVersion": 49,
+  "prevRoundsTiebreakRanks": {},
+  "prevRoundsTiebreakLineageRanks": {},
+  "sessionId": "bea7a0ce-ad7f-4345-8e8a-a79ae55e1ffa",
+  "boxVersion": 50,
   "leadTiebreakBadgesByName": {
     "Leonte Matei": {
+      "tb_prev": false,
+      "tb_time": true
+    },
+    "Cireap Paul": {
+      "tb_prev": false,
+      "tb_time": true
+    },
+    "Alexandru Radu": {
       "tb_prev": true,
       "tb_time": false,
       "tb_prev_helper": {
         "prev_ranks_by_name": {
           "Alexandru Radu": 3,
-          "Leonte Matei": 2,
-          "Nicolici Radu": 3
+          "Nicolici Radu": 4
         },
         "members": [
           "Alexandru Radu",
-          "Leonte Matei",
           "Nicolici Radu"
         ],
-        "lineage_key": "tb-lineage:fccc68a4c61f1a8da495511360fea9f1176516cc"
+        "lineage_key": "tb-lineage:81a0249c5ee31384bb872ad5197631898c863938"
       }
     }
   },
   "leadTiebreakBadgesRouteIndex": 1,
-  "scores": {
-    "Cireap Paul": [
-      2.0
-    ],
-    "Leonte Matei": [
-      1.0
-    ],
-    "Alexandru Radu": [
-      1.0
-    ],
-    "Nicolici Radu": [
-      1.0
-    ]
-  },
-  "times": {
-    "Cireap Paul": [
-      1.0
-    ],
-    "Leonte Matei": [
-      1.0
-    ],
-    "Alexandru Radu": [
-      4.0
-    ],
-    "Nicolici Radu": [
-      25.0
-    ]
-  }
+  "scores": {},
+  "times": {}
 }
