@@ -1,20 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
-import { createHash } from 'node:crypto';
 import PublicRankings from '../components/PublicRankings';
 
-const buildLineageKey = (hold: number): string => {
-  const payload =
-    '{"context":"overall","performance":{"hold":' +
-    hold +
-    ',"plus":false,"topped":false},"round":"Final|route:1"}';
-  const digest = createHash('sha1').update(payload).digest('hex');
-  return `tb-lineage:${digest}`;
-};
-
 const buildSnapshotBoxes = () => {
-  const prevLineageKey = buildLineageKey(20);
   return [
     {
       boxId: 0,
@@ -35,16 +24,23 @@ const buildSnapshotBoxes = () => {
         Cara: [140],
         Dan: [160],
       },
-      prevRoundsTiebreakLineageRanks: {
-        [prevLineageKey]: {
-          Cara: 1,
-          Dan: 2,
-        },
-      },
       leadRankingRows: [
         { name: 'Alice', rank: 1, total: 30, tb_time: true, tb_prev: false },
         { name: 'Bob', rank: 2, total: 30, tb_time: true, tb_prev: false },
-        { name: 'Cara', rank: 3, total: 20, tb_time: false, tb_prev: true },
+        {
+          name: 'Cara',
+          rank: 3,
+          total: 20,
+          tb_time: false,
+          tb_prev: true,
+          tb_prev_helper: {
+            prev_ranks_by_name: {
+              Cara: 1,
+              Dan: 2,
+            },
+            members: ['Cara', 'Dan'],
+          },
+        },
         { name: 'Dan', rank: 4, total: 20, tb_time: false, tb_prev: false },
       ],
     },

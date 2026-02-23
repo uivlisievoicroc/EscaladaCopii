@@ -32,6 +32,7 @@
 import React, { FC, useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getSpectatorToken, clearSpectatorToken } from './PublicHub';
+import { backoffDelayMs, buildWsUrl, parseWsJson, replyPong } from '../utilis/wsClient';
 
 /**
  * WebSocket Configuration
@@ -44,8 +45,7 @@ import { getSpectatorToken, clearSpectatorToken } from './PublicHub';
  * - Backend: escalada-api/escalada/api/public.py router
  * - Auth: Spectator JWT with 24h TTL (from PublicHub)
  */
-const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
-const WS_BASE = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/public/ws`;
+const WS_BASE = buildWsUrl('/api/public/ws');
 
 /**
  * Reconnection Configuration
@@ -219,30 +219,27 @@ const PublicLiveClimbing: FC = () => {
        * - Connection continues (doesn't close on bad message)
        */
       ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
+        const data = parseWsJson(event.data);
+        if (!data) return;
 
-          // Heartbeat: Reply to PING with PONG
-          if (data.type === 'PING') {
-            ws.send(JSON.stringify({ type: 'PONG' }));
-            return;
+        // Heartbeat: Reply to PING with PONG
+        if (data.type === 'PING') {
+          replyPong(ws, data.timestamp);
+          return;
+        }
+
+        // State update: Full snapshot from server
+        if (data.type === 'STATE_SNAPSHOT') {
+          setState(data as StateSnapshot);
+
+          // Update timer baseline for local ticking (if valid remaining)
+          if (typeof data.remaining === 'number' && Number.isFinite(data.remaining)) {
+            remainingBaseRef.current = { atMs: Date.now(), remaining: data.remaining };
+            setDisplayRemaining(data.remaining);
+          } else {
+            remainingBaseRef.current = null;
+            setDisplayRemaining(null);
           }
-
-          // State update: Full snapshot from server
-          if (data.type === 'STATE_SNAPSHOT') {
-            setState(data);
-
-            // Update timer baseline for local ticking (if valid remaining)
-            if (typeof data.remaining === 'number' && Number.isFinite(data.remaining)) {
-              remainingBaseRef.current = { atMs: Date.now(), remaining: data.remaining };
-              setDisplayRemaining(data.remaining);
-            } else {
-              remainingBaseRef.current = null;
-              setDisplayRemaining(null);
-            }
-          }
-        } catch (err) {
-          console.error('Failed to parse WS message:', err);
         }
       };
 
@@ -301,7 +298,7 @@ const PublicLiveClimbing: FC = () => {
 
         // Attempt reconnect with exponential backoff (up to 10 attempts)
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-          const delay = RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts);
+          const delay = backoffDelayMs(reconnectAttempts, RECONNECT_BASE_DELAY_MS, 600000);
           reconnectTimeoutRef.current = setTimeout(() => {
             setReconnectAttempts((prev) => prev + 1);
             connect();

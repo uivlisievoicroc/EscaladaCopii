@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import ControlPanel from '../components/ControlPanel';
@@ -87,7 +87,12 @@ describe('ControlPanel button flows', () => {
     consoleWarnSpy?.mockRestore();
   });
 
-
+  const openActionsSection = async () => {
+    const actionsButtons = await screen.findAllByRole('button', { name: 'Actions' });
+    await act(async () => {
+      actionsButtons[0].click();
+    });
+  };
 
   it('sends PROGRESS_UPDATE when clicking +1 Hold for each listbox', async () => {
     await act(async () => {
@@ -203,6 +208,36 @@ describe('ControlPanel button flows', () => {
     });
 
     expect(await screen.findByLabelText('Score')).toBeInTheDocument();
+  });
+
+  it('opens and closes Show Tie-breaks modal with fallback when tie-break snapshot is missing', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <ControlPanel />
+        </MemoryRouter>,
+      );
+    });
+
+    await openActionsSection();
+
+    const showButtons = await screen.findAllByRole('button', { name: 'Show Tie-breaks' });
+    expect(showButtons[0]).toBeEnabled();
+    await act(async () => {
+      showButtons[0].click();
+    });
+
+    expect(await screen.findByText('Tie-break overview')).toBeInTheDocument();
+    const hasMissingDataFallback = !!screen.queryByText(
+      'No tie-break data available for this category yet.',
+    );
+    const hasNoEventsFallback = !!screen.queryByText(
+      'No tie-break events recorded for this category.',
+    );
+    expect(hasMissingDataFallback || hasNoEventsFallback).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByText('Tie-break overview')).not.toBeInTheDocument();
   });
 
   it('submits SUBMIT_SCORE using competitor from backend state', async () => {

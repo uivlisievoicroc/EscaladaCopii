@@ -1,6 +1,7 @@
 import React, { FC, useCallback, useEffect, useRef, useState } from 'react';
 import { RankingsPageSkeleton } from './Skeleton';  // Loading placeholder during initial fetch
 import RankingsBoard, { PublicBox, RankingsHeaderCard, normalizeBox } from './RankingsBoard';  // Main ranking display components
+import { buildApiUrl, buildWsUrl, parseWsJson, replyPong } from '../utilis/wsClient';
 
 /**
  * API Configuration - Environment-Aware Endpoints
@@ -19,10 +20,8 @@ import RankingsBoard, { PublicBox, RankingsHeaderCard, normalizeBox } from './Ra
  * - Production: Reverse proxy (nginx) handles routing
  * - Development: Direct connection to backend server
  */
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';  // Match page protocol
-const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';  // Secure WebSocket if HTTPS
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/public`;  // REST API base URL
-const WS_URL = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/public/ws`;  // WebSocket URL for live updates
+const API_BASE = buildApiUrl('/api/public');  // REST API base URL
+const WS_URL = buildWsUrl('/api/public/ws');  // WebSocket URL for live updates
 
 /**
  * POLL_INTERVAL_MS - Fallback Polling Frequency
@@ -360,32 +359,29 @@ const RankingsPage: FC = () => {
 
     // onmessage: Received message from server
     ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);  // Parse JSON message
-        
-        // PING: Heartbeat to keep connection alive
-        if (msg?.type === 'PING') {
-          ws.send(JSON.stringify({ type: 'PONG', timestamp: msg.timestamp }));  // Reply with PONG
-          return;
-        }
-        
-        // PUBLIC_STATE_SNAPSHOT: Full state for all boxes
-        if (msg?.type === 'PUBLIC_STATE_SNAPSHOT' && Array.isArray(msg.boxes)) {
-          applySnapshot(msg.boxes);  // Replace entire state
-          return;
-        }
-        
-        // Incremental box updates: BOX_STATUS_UPDATE, BOX_FLOW_UPDATE, BOX_RANKING_UPDATE
-        if (
-          (msg?.type === 'BOX_STATUS_UPDATE' ||  // Timer state changed
-            msg?.type === 'BOX_FLOW_UPDATE' ||  // Competitor queue changed
-            msg?.type === 'BOX_RANKING_UPDATE') &&  // Scores updated
-          msg.box  // Message includes box data
-        ) {
-          applyBoxUpdate(msg.box);  // Update single box
-        }
-      } catch {
-        // Ignore malformed messages (invalid JSON, unexpected structure)
+      const msg = parseWsJson(event.data);
+      if (!msg) return;
+
+      // PING: Heartbeat to keep connection alive
+      if (msg.type === 'PING') {
+        replyPong(ws, msg.timestamp);
+        return;
+      }
+
+      // PUBLIC_STATE_SNAPSHOT: Full state for all boxes
+      if (msg.type === 'PUBLIC_STATE_SNAPSHOT' && Array.isArray(msg.boxes)) {
+        applySnapshot(msg.boxes);  // Replace entire state
+        return;
+      }
+
+      // Incremental box updates: BOX_STATUS_UPDATE, BOX_FLOW_UPDATE, BOX_RANKING_UPDATE
+      if (
+        (msg.type === 'BOX_STATUS_UPDATE' ||  // Timer state changed
+          msg.type === 'BOX_FLOW_UPDATE' ||  // Competitor queue changed
+          msg.type === 'BOX_RANKING_UPDATE') &&  // Scores updated
+        msg.box  // Message includes box data
+      ) {
+        applyBoxUpdate(msg.box);  // Update single box
       }
     };
 

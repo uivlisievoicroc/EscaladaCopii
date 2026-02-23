@@ -1,18 +1,6 @@
 import { debugError } from './debug';
 import { safeSetItem, safeGetItem } from './storage';
-import { fetchWithRetry } from './fetch';
-import { clearAuth } from './auth';
-
-// src/utilis/contestActions.js
-// Error-safe fetch wrapper with proper response validation
-// Includes timeout and retry logic for resilient network requests
-
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API = `${API_PROTOCOL}://${window.location.hostname}:8000/api/cmd`;
-const ADMIN_API = `${API_PROTOCOL}://${window.location.hostname}:8000/api/admin`;
-const STATE_API = `${API_PROTOCOL}://${window.location.hostname}:8000/api/state`;
-
-// ==================== SESSION ID & VERSION HELPERS ====================
+import { postCmd, getStateSnapshot, requestAdminJson } from './commandClient';
 
 const getBoxVersion = (boxId) => {
   const raw = safeGetItem(`boxVersion-${boxId}`);
@@ -20,351 +8,89 @@ const getBoxVersion = (boxId) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 
-const getSessionId = (boxId) => {
-  return safeGetItem(`sessionId-${boxId}`);
-};
+const getSessionId = (boxId) => safeGetItem(`sessionId-${boxId}`);
 
 const setSessionId = (boxId, sessionId) => {
-  if (sessionId) {
-    safeSetItem(`sessionId-${boxId}`, sessionId);
-  }
+  if (sessionId) safeSetItem(`sessionId-${boxId}`, sessionId);
 };
 
-// ==================== ERROR HANDLING HELPERS ====================
+const withBoxMeta = (boxId, payload = {}, includeVersion = true) => ({
+  boxId,
+  ...payload,
+  sessionId: getSessionId(boxId),
+  ...(includeVersion ? { boxVersion: getBoxVersion(boxId) } : {}),
+});
 
-/**
- * Parse error response from backend
- * @param {Response} response - Fetch response object
- * @returns {Promise<string>} Error message
- */
-const getErrorMessage = async (response) => {
+const persistTimerCmd = (type, boxId) => {
   try {
-    const errorData = await response.json();
-    return errorData.detail || `HTTP ${response.status}: ${response.statusText}`;
-  } catch {
-    return `HTTP ${response.status}: ${response.statusText}`;
+    safeSetItem('timer-cmd', JSON.stringify({ type, boxId, ts: Date.now() }));
+  } catch (err) {
+    debugError(`Failed to persist ${type} command`, err);
   }
 };
 
-/**
- * Validate fetch response and throw if not ok
- * @param {Response} response - Fetch response object
- * @param {string} commandType - Type of command for logging
- * @throws {Error} If response is not ok
- */
-const validateResponse = async (response, commandType) => {
-  if (!response.ok) {
-    const errorMsg = await getErrorMessage(response);
-    if (response.status === 401 || response.status === 403) {
-      clearAuth(); // token invalid/rol/box neautorizat -> forțează relogin
-    }
-    const error = new Error(`[${commandType}] ${errorMsg}`);
-    error.status = response.status;
-    error.commandType = commandType;
-    debugError(`Command failed: ${commandType}`, error);
-    throw error;
-  }
+const sendBoxCommand = async (boxId, type, payload = {}, options = {}) => {
+  const { includeVersion = true } = options;
+  return postCmd(
+    withBoxMeta(
+      boxId,
+      {
+        type,
+        ...payload,
+      },
+      includeVersion,
+    ),
+    type,
+  );
 };
 
-// ==================== COMMAND ACTIONS ====================
-
-/**
- * Start the timer for a box
- * @param {number} boxId - Box identifier
- * @throws {Error} If API request fails
- */
 export async function startTimer(boxId) {
-  try {
-    safeSetItem('timer-cmd', JSON.stringify({ type: 'START_TIMER', boxId, ts: Date.now() }));
-  } catch (err) {
-    debugError('Failed to persist START_TIMER command', err);
-  }
-
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'START_TIMER',
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'START_TIMER');
-    return await response.json();
-  } catch (err) {
-    debugError('[startTimer] Error:', err);
-    throw err;
-  }
+  persistTimerCmd('START_TIMER', boxId);
+  return sendBoxCommand(boxId, 'START_TIMER');
 }
 
-/**
- * Stop the timer for a box
- * @param {number} boxId - Box identifier
- * @throws {Error} If API request fails
- */
 export async function stopTimer(boxId) {
-  try {
-    safeSetItem('timer-cmd', JSON.stringify({ type: 'STOP_TIMER', boxId, ts: Date.now() }));
-  } catch (err) {
-    debugError('Failed to persist STOP_TIMER command', err);
-  }
-
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'STOP_TIMER',
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'STOP_TIMER');
-    return await response.json();
-  } catch (err) {
-    debugError('[stopTimer] Error:', err);
-    throw err;
-  }
+  persistTimerCmd('STOP_TIMER', boxId);
+  return sendBoxCommand(boxId, 'STOP_TIMER');
 }
 
-/**
- * Resume a paused timer for a box
- * @param {number} boxId - Box identifier
- * @throws {Error} If API request fails
- */
 export async function resumeTimer(boxId) {
-  try {
-    safeSetItem('timer-cmd', JSON.stringify({ type: 'RESUME_TIMER', boxId, ts: Date.now() }));
-  } catch (err) {
-    debugError('Failed to persist RESUME_TIMER command', err);
-  }
-
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'RESUME_TIMER',
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'RESUME_TIMER');
-    return await response.json();
-  } catch (err) {
-    debugError('[resumeTimer] Error:', err);
-    throw err;
-  }
+  persistTimerCmd('RESUME_TIMER', boxId);
+  return sendBoxCommand(boxId, 'RESUME_TIMER');
 }
 
-/**
- * Update progress (holds climbed) for current competitor
- * @param {number} boxId - Box identifier
- * @param {number} delta - Holds to add (positive/negative)
- * @throws {Error} If API request fails
- */
 export async function updateProgress(boxId, delta = 1) {
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'PROGRESS_UPDATE',
-          delta,
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'PROGRESS_UPDATE');
-    return await response.json();
-  } catch (err) {
-    debugError('[updateProgress] Error:', err);
-    throw err;
-  }
+  return sendBoxCommand(boxId, 'PROGRESS_UPDATE', { delta });
 }
-
-// ==================== COMPETITION OFFICIALS (ADMIN) ====================
 
 export async function getCompetitionOfficials() {
-  const response = await fetchWithRetry(
-    `${ADMIN_API}/competition_officials`,
-    {
-      method: 'GET',
-      credentials: 'include',
-    },
-    3,
-    5000,
-  );
-  await validateResponse(response, 'GET_COMPETITION_OFFICIALS');
-  return await response.json();
+  return requestAdminJson('/competition_officials', 'GET', 'GET_COMPETITION_OFFICIALS');
 }
 
 export async function setCompetitionOfficials(judgeChief, competitionDirector, chiefRoutesetter) {
-  const response = await fetchWithRetry(
-    `${ADMIN_API}/competition_officials`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        judgeChief: judgeChief ?? '',
-        competitionDirector: competitionDirector ?? '',
-        chiefRoutesetter: chiefRoutesetter ?? '',
-      }),
-    },
-    3,
-    5000,
-  );
-  await validateResponse(response, 'SET_COMPETITION_OFFICIALS');
-  return await response.json();
+  return requestAdminJson('/competition_officials', 'POST', 'SET_COMPETITION_OFFICIALS', {
+    judgeChief: judgeChief ?? '',
+    competitionDirector: competitionDirector ?? '',
+    chiefRoutesetter: chiefRoutesetter ?? '',
+  });
 }
 
-/**
- * Request the currently active competitor for a box
- * @param {number} boxId - Box identifier
- * @throws {Error} If API request fails
- */
 export async function requestActiveCompetitor(boxId) {
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'REQUEST_ACTIVE_COMPETITOR',
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'REQUEST_ACTIVE_COMPETITOR');
-    return await response.json();
-  } catch (err) {
-    debugError('[requestActiveCompetitor] Error:', err);
-    throw err;
-  }
+  return sendBoxCommand(boxId, 'REQUEST_ACTIVE_COMPETITOR');
 }
 
-/**
- * Submit score for current competitor
- * @param {number} boxId - Box identifier
- * @param {number} score - Final score (holds)
- * @param {string} competitor - Competitor name
- * @param {number | undefined} [registeredTime] - Registered time in seconds (optional)
- * @throws {Error} If API request fails
- */
 export async function submitScore(boxId, score, competitor, registeredTime) {
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'SUBMIT_SCORE',
-          score,
-          competitor,
-          registeredTime: typeof registeredTime === 'number' ? registeredTime : undefined,
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'SUBMIT_SCORE');
-    return await response.json();
-  } catch (err) {
-    debugError('[submitScore] Error:', err);
-    throw err;
-  }
+  return sendBoxCommand(boxId, 'SUBMIT_SCORE', {
+    score,
+    competitor,
+    registeredTime: typeof registeredTime === 'number' ? registeredTime : undefined,
+  });
 }
 
-/**
- * Register the time for current competitor
- * @param {number} boxId - Box identifier
- * @param {number} registeredTime - Time to register in seconds
- * @throws {Error} If API request fails
- */
 export async function registerTime(boxId, registeredTime) {
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'REGISTER_TIME',
-          registeredTime,
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'REGISTER_TIME');
-    return await response.json();
-  } catch (err) {
-    debugError('[registerTime] Error:', err);
-    throw err;
-  }
+  return sendBoxCommand(boxId, 'REGISTER_TIME', { registeredTime });
 }
 
-/**
- * Initialize a new route in the contest
- * @param {number} boxId - Box identifier
- * @param {number} routeIndex - Route number (1-based)
- * @param {number} holdsCount - Total holds on route
- * @param {Array} competitors - List of competitors
- * @param {string} timerPreset - Timer preset (MM:SS)
- * @throws {Error} If API request fails
- */
 export async function initRoute(
   boxId,
   routeIndex,
@@ -375,57 +101,25 @@ export async function initRoute(
   holdsCounts,
   categorie,
 ) {
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'INIT_ROUTE',
-          routeIndex,
-          holdsCount,
-          routesCount,
-          holdsCounts,
-          competitors,
-          timerPreset,
-          categorie,
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'INIT_ROUTE');
-    return await response.json();
-  } catch (err) {
-    debugError('[initRoute] Error:', err);
-    throw err;
-  }
+  return postCmd(
+    {
+      boxId,
+      type: 'INIT_ROUTE',
+      routeIndex,
+      holdsCount,
+      routesCount,
+      holdsCounts,
+      competitors,
+      timerPreset,
+      categorie,
+    },
+    'INIT_ROUTE',
+  );
 }
 
-/**
- * Set/update the timer preset for a box (admin setup).
- * Persists to backend so all clients (e.g. Judge Remote) update in real time.
- * @param {number} boxId - Box identifier
- * @param {string} timerPreset - Timer preset (MM:SS)
- * @throws {Error} If API request fails
- */
 export async function setTimerPreset(boxId, timerPreset) {
   const fetchAndStoreState = async () => {
-    const response = await fetchWithRetry(
-      `${STATE_API}/${boxId}`,
-      {
-        method: 'GET',
-        credentials: 'include',
-      },
-      3,
-      5000,
-    );
-    await validateResponse(response, 'GET_STATE');
-    const st = await response.json();
+    const st = await getStateSnapshot(boxId);
     if (st?.sessionId) setSessionId(boxId, st.sessionId);
     if (typeof st?.boxVersion === 'number') {
       safeSetItem(`boxVersion-${boxId}`, String(st.boxVersion));
@@ -433,203 +127,73 @@ export async function setTimerPreset(boxId, timerPreset) {
     return st;
   };
 
-  try {
-    let sessionId = getSessionId(boxId);
-    let boxVersion = getBoxVersion(boxId);
+  let sessionId = getSessionId(boxId);
+  let boxVersion = getBoxVersion(boxId);
 
-    if (!sessionId) {
-      const st = await fetchAndStoreState();
-      sessionId = st?.sessionId;
-      boxVersion = typeof st?.boxVersion === 'number' ? st.boxVersion : undefined;
-    }
-
-    const doPost = async () => {
-      const response = await fetchWithRetry(
-        API,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            boxId,
-            type: 'SET_TIMER_PRESET',
-            timerPreset,
-            sessionId,
-            boxVersion,
-          }),
-        },
-        3,
-        5000,
-      );
-
-      await validateResponse(response, 'SET_TIMER_PRESET');
-      return await response.json();
-    };
-
-    let result = await doPost();
-    if (
-      result?.status === 'ignored' &&
-      (result.reason === 'stale_version' || result.reason === 'stale_session')
-    ) {
-      await fetchAndStoreState();
-      sessionId = getSessionId(boxId);
-      boxVersion = getBoxVersion(boxId);
-      result = await doPost();
-    }
-    return result;
-  } catch (err) {
-    debugError('[setTimerPreset] Error:', err);
-    throw err;
+  if (!sessionId) {
+    const st = await fetchAndStoreState();
+    sessionId = st?.sessionId;
+    boxVersion = typeof st?.boxVersion === 'number' ? st.boxVersion : undefined;
   }
+
+  const doPost = () =>
+    postCmd(
+      {
+        boxId,
+        type: 'SET_TIMER_PRESET',
+        timerPreset,
+        sessionId,
+        boxVersion,
+      },
+      'SET_TIMER_PRESET',
+    );
+
+  let result = await doPost();
+  if (
+    result?.status === 'ignored' &&
+    (result.reason === 'stale_version' || result.reason === 'stale_session')
+  ) {
+    await fetchAndStoreState();
+    sessionId = getSessionId(boxId);
+    boxVersion = getBoxVersion(boxId);
+    result = await doPost();
+  }
+  return result;
 }
 
-/**
- * Request state snapshot from backend
- * @param {number} boxId - Box identifier
- * @throws {Error} If API request fails
- */
 export async function requestState(boxId) {
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'REQUEST_STATE',
-          sessionId: getSessionId(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'REQUEST_STATE');
-    return await response.json();
-  } catch (err) {
-    debugError('[requestState] Error:', err);
-    throw err;
-  }
+  return postCmd(
+    {
+      boxId,
+      type: 'REQUEST_STATE',
+      sessionId: getSessionId(boxId),
+    },
+    'REQUEST_STATE',
+  );
 }
 
-/**
- * Reset box state and regenerate sessionId
- * @param {number} boxId - Box identifier
- * @throws {Error} If API request fails
- */
 export async function resetBox(boxId) {
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'RESET_BOX',
-          sessionId: getSessionId(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'RESET_BOX');
-    return await response.json();
-  } catch (err) {
-    debugError('[resetBox] Error:', err);
-    throw err;
-  }
+  return sendBoxCommand(boxId, 'RESET_BOX', {}, { includeVersion: false });
 }
 
-/**
- * Partial reset for a box (checkbox-driven).
- * @param {number} boxId - Box identifier
- * @param {{resetTimer?: boolean, clearProgress?: boolean, unmarkAll?: boolean}} opts
- * @throws {Error} If API request fails
- */
 export async function resetBoxPartial(boxId, opts = {}) {
   const { resetTimer = false, clearProgress = false, unmarkAll = false } = opts || {};
-  try {
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'RESET_PARTIAL',
-          resetTimer,
-          clearProgress,
-          unmarkAll,
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'RESET_PARTIAL');
-    return await response.json();
-  } catch (err) {
-    debugError('[resetBoxPartial] Error:', err);
-    throw err;
-  }
+  return sendBoxCommand(boxId, 'RESET_PARTIAL', {
+    resetTimer,
+    clearProgress,
+    unmarkAll,
+  });
 }
 
-/**
- * Persist manual time tiebreak decision for current eligible top-3 tie event.
- * @param {number} boxId
- * @param {'yes'|'no'} decision
- * @param {string} fingerprint
- * @throws {Error} If API request fails
- */
 export async function setTimeTiebreakDecision(boxId, decision, fingerprint) {
-  try {
-    const normalizedDecision = String(decision || '').trim().toLowerCase();
-    const normalizedFingerprint = String(fingerprint || '').trim();
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'SET_TIME_TIEBREAK_DECISION',
-          timeTiebreakDecision: normalizedDecision,
-          timeTiebreakFingerprint: normalizedFingerprint,
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
-
-    await validateResponse(response, 'SET_TIME_TIEBREAK_DECISION');
-    return await response.json();
-  } catch (err) {
-    debugError('[setTimeTiebreakDecision] Error:', err);
-    throw err;
-  }
+  const normalizedDecision = String(decision || '').trim().toLowerCase();
+  const normalizedFingerprint = String(fingerprint || '').trim();
+  return sendBoxCommand(boxId, 'SET_TIME_TIEBREAK_DECISION', {
+    timeTiebreakDecision: normalizedDecision,
+    timeTiebreakFingerprint: normalizedFingerprint,
+  });
 }
 
-/**
- * Persist manual previous-rounds tiebreak decision for current eligible top-3 tie event.
- * @param {number} boxId
- * @param {'yes'|'no'} decision
- * @param {string} fingerprint
- * @param {string | null | undefined} lineageKey
- * @param {string[]} order
- * @param {Record<string, number>} ranksByName
- * @throws {Error} If API request fails
- */
 export async function setPrevRoundsTiebreakDecision(
   boxId,
   decision,
@@ -638,57 +202,34 @@ export async function setPrevRoundsTiebreakDecision(
   order = [],
   ranksByName = {},
 ) {
-  try {
-    const normalizedDecision = String(decision || '').trim().toLowerCase();
-    const normalizedFingerprint = String(fingerprint || '').trim();
-    const normalizedLineageKey =
-      typeof lineageKey === 'string' && lineageKey.trim() ? lineageKey.trim() : null;
-    const normalizedOrder = Array.isArray(order)
-      ? order
-          .map((item) => (typeof item === 'string' ? item.trim() : ''))
-          .filter((item, idx, arr) => item && arr.indexOf(item) === idx)
-      : [];
-    const normalizedRanksByName =
-      ranksByName && typeof ranksByName === 'object'
-        ? Object.entries(ranksByName).reduce((acc, [name, rank]) => {
-            const cleanName = typeof name === 'string' ? name.trim() : '';
-            if (!cleanName) return acc;
-            const value = Number(rank);
-            if (!Number.isFinite(value) || value <= 0) return acc;
-            acc[cleanName] = Math.trunc(value);
-            return acc;
-          }, {})
-        : {};
-    const response = await fetchWithRetry(
-      API,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          boxId,
-          type: 'SET_PREV_ROUNDS_TIEBREAK_DECISION',
-          prevRoundsTiebreakDecision: normalizedDecision,
-          prevRoundsTiebreakFingerprint: normalizedFingerprint,
-          prevRoundsTiebreakLineageKey: normalizedLineageKey,
-          prevRoundsTiebreakOrder: normalizedOrder,
-          prevRoundsTiebreakRanksByName: normalizedRanksByName,
-          sessionId: getSessionId(boxId),
-          boxVersion: getBoxVersion(boxId),
-        }),
-      },
-      3,
-      5000,
-    );
+  const normalizedDecision = String(decision || '').trim().toLowerCase();
+  const normalizedFingerprint = String(fingerprint || '').trim();
+  const normalizedLineageKey =
+    typeof lineageKey === 'string' && lineageKey.trim() ? lineageKey.trim() : null;
+  const normalizedOrder = Array.isArray(order)
+    ? order
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter((item, idx, arr) => item && arr.indexOf(item) === idx)
+    : [];
+  const normalizedRanksByName =
+    ranksByName && typeof ranksByName === 'object'
+      ? Object.entries(ranksByName).reduce((acc, [name, rank]) => {
+          const cleanName = typeof name === 'string' ? name.trim() : '';
+          if (!cleanName) return acc;
+          const value = Number(rank);
+          if (!Number.isFinite(value) || value <= 0) return acc;
+          acc[cleanName] = Math.trunc(value);
+          return acc;
+        }, {})
+      : {};
 
-    await validateResponse(response, 'SET_PREV_ROUNDS_TIEBREAK_DECISION');
-    return await response.json();
-  } catch (err) {
-    debugError('[setPrevRoundsTiebreakDecision] Error:', err);
-    throw err;
-  }
+  return sendBoxCommand(boxId, 'SET_PREV_ROUNDS_TIEBREAK_DECISION', {
+    prevRoundsTiebreakDecision: normalizedDecision,
+    prevRoundsTiebreakFingerprint: normalizedFingerprint,
+    prevRoundsTiebreakLineageKey: normalizedLineageKey,
+    prevRoundsTiebreakOrder: normalizedOrder,
+    prevRoundsTiebreakRanksByName: normalizedRanksByName,
+  });
 }
-
-// ==================== EXPORTS ====================
 
 export { getSessionId, setSessionId, getBoxVersion };

@@ -1,6 +1,7 @@
 import React, { FC, useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getSpectatorToken, clearSpectatorToken } from './PublicHub';
+import { backoffDelayMs, buildApiUrl, buildWsUrl, parseWsJson, replyPong } from '../utilis/wsClient';
 
 /**
  * PublicRankings Module - Simplified Live Rankings Display (Legacy)
@@ -46,10 +47,8 @@ import { getSpectatorToken, clearSpectatorToken } from './PublicHub';
  * - Production: Reverse proxy (nginx) handles routing
  * - Development: Direct connection to backend
  */
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/public`;
-const WS_URL = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/public/ws`;
+const API_BASE = buildApiUrl('/api/public');
+const WS_URL = buildWsUrl('/api/public/ws');
 
 /**
  * MAX_RECONNECT_ATTEMPTS - Reconnection Limit
@@ -111,6 +110,11 @@ type PublicBox = {
     tb_time?: boolean;
     tb_prev?: boolean;
     raw_scores?: Array<number | null | undefined>;
+    tb_prev_helper?: {
+      prev_ranks_by_name?: Record<string, number>;
+      members?: string[];
+      lineage_key?: string | null;
+    };
   }>;
 };
 
@@ -132,6 +136,11 @@ type RankingRow = {
   scores: Array<number | undefined>;  // Raw scores per route
   tbTime: boolean;
   tbPrev: boolean;
+  tbPrevHelper?: {
+    prevRanksByName: Record<string, number>;
+    members: string[];
+    lineageKey: string | null;
+  };
 };
 
 type TieBreakKind = 'time' | 'prev';
@@ -162,78 +171,6 @@ type ActiveHelper = {
 type DerivedPerformance = {
   key: string;
   holdsLabel: string;
-};
-
-const sha1Hex = (input: string): string => {
-  const msg = unescape(encodeURIComponent(input));
-  const words: number[] = [];
-  for (let i = 0; i < msg.length; i += 1) {
-    words[i >> 2] = (words[i >> 2] || 0) | (msg.charCodeAt(i) << (24 - (i % 4) * 8));
-  }
-  words[msg.length >> 2] = (words[msg.length >> 2] || 0) | (0x80 << (24 - (msg.length % 4) * 8));
-  words[(((msg.length + 8) >> 6) + 1) * 16 - 1] = msg.length * 8;
-
-  const rotateLeft = (n: number, s: number) => (n << s) | (n >>> (32 - s));
-  let h0 = 0x67452301;
-  let h1 = 0xefcdab89;
-  let h2 = 0x98badcfe;
-  let h3 = 0x10325476;
-  let h4 = 0xc3d2e1f0;
-
-  for (let i = 0; i < words.length; i += 16) {
-    const w = new Array<number>(80);
-    for (let t = 0; t < 16; t += 1) w[t] = words[i + t] || 0;
-    for (let t = 16; t < 80; t += 1) {
-      w[t] = rotateLeft((w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]) | 0, 1);
-    }
-
-    let a = h0;
-    let b = h1;
-    let c = h2;
-    let d = h3;
-    let e = h4;
-
-    for (let t = 0; t < 80; t += 1) {
-      let f = 0;
-      let k = 0;
-      if (t < 20) {
-        f = (b & c) | (~b & d);
-        k = 0x5a827999;
-      } else if (t < 40) {
-        f = b ^ c ^ d;
-        k = 0x6ed9eba1;
-      } else if (t < 60) {
-        f = (b & c) | (b & d) | (c & d);
-        k = 0x8f1bbcdc;
-      } else {
-        f = b ^ c ^ d;
-        k = 0xca62c1d6;
-      }
-      const temp = (rotateLeft(a, 5) + f + e + k + w[t]) | 0;
-      e = d;
-      d = c;
-      c = rotateLeft(b, 30);
-      b = a;
-      a = temp;
-    }
-
-    h0 = (h0 + a) | 0;
-    h1 = (h1 + b) | 0;
-    h2 = (h2 + c) | 0;
-    h3 = (h3 + d) | 0;
-    h4 = (h4 + e) | 0;
-  }
-
-  const toHex = (n: number) => (n >>> 0).toString(16).padStart(8, '0');
-  return `${toHex(h0)}${toHex(h1)}${toHex(h2)}${toHex(h3)}${toHex(h4)}`;
-};
-
-const stableStringify = (value: unknown): string => {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
 };
 
 const formatSeconds = (raw: unknown): string => {
@@ -291,22 +228,6 @@ const derivePerformance = (score: number | null, activeHoldsCount: number | null
   };
 };
 
-const buildLineagePayload = (box: PublicBox, perf: DerivedPerformance): string => {
-  const parts = perf.key.split('|');
-  const topped = parts[0] === 't:1';
-  const hold = Number(parts[1]?.replace('h:', '') || '0');
-  const plus = parts[2] === 'p:1';
-  return stableStringify({
-    round: `Final|route:${getActiveRouteIndex(box)}`,
-    context: 'overall',
-    performance: {
-      topped,
-      hold,
-      plus,
-    },
-  });
-};
-
 /**
  * buildRankingRows - Build Rankings Table
  *
@@ -336,6 +257,33 @@ const buildRankingRows = (box: PublicBox): RankingRow[] => {
         : [],
       tbTime: !!row.tb_time,
       tbPrev: !!row.tb_prev,
+      tbPrevHelper:
+        row.tb_prev_helper &&
+        typeof row.tb_prev_helper === 'object' &&
+        row.tb_prev_helper.prev_ranks_by_name &&
+        typeof row.tb_prev_helper.prev_ranks_by_name === 'object'
+          ? {
+              prevRanksByName: Object.entries(row.tb_prev_helper.prev_ranks_by_name).reduce(
+                (acc, [name, rank]) => {
+                  if (typeof name !== 'string' || !name.trim()) return acc;
+                  const value = Number(rank);
+                  if (!Number.isFinite(value) || value <= 0) return acc;
+                  acc[name.trim()] = Math.trunc(value);
+                  return acc;
+                },
+                {} as Record<string, number>,
+              ),
+              members: Array.isArray(row.tb_prev_helper.members)
+                ? row.tb_prev_helper.members
+                    .map((name) => (typeof name === 'string' ? name.trim() : ''))
+                    .filter((name, idx, arr) => !!name && arr.indexOf(name) === idx)
+                : [],
+              lineageKey:
+                typeof row.tb_prev_helper.lineage_key === 'string'
+                  ? row.tb_prev_helper.lineage_key
+                  : null,
+            }
+          : undefined,
     }))
     .filter((row) => !!row.nume)
     .sort((a, b) => a.rank - b.rank || a.nume.localeCompare(b.nume));
@@ -477,38 +425,35 @@ const PublicRankings: FC = () => {
        * - If not found: Append new box (shouldn't happen, but handled)
        */
       ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
+        const data = parseWsJson(event.data);
+        if (!data) return;
 
-          // Heartbeat: Reply with PONG to keep connection alive
-          if (data.type === 'PING') {
-            ws.send(JSON.stringify({ type: 'PONG' }));
-            return;
-          }
+        // Heartbeat: Reply with PONG to keep connection alive
+        if (data.type === 'PING') {
+          replyPong(ws, data.timestamp);
+          return;
+        }
 
-          // Full state snapshot: Replace entire boxes array
-          if (data.type === 'PUBLIC_STATE_SNAPSHOT' && Array.isArray(data.boxes)) {
-            setBoxes(data.boxes);
-          } 
-          // Incremental update: Merge into existing box
-          else if (
-            ['BOX_STATUS_UPDATE', 'BOX_FLOW_UPDATE', 'BOX_RANKING_UPDATE'].includes(data.type) &&
-            data.box
-          ) {
-            setBoxes((prev) => {
-              const idx = prev.findIndex((b) => b.boxId === data.box.boxId);
-              if (idx >= 0) {
-                // Found: Merge update into existing box
-                const updated = [...prev];
-                updated[idx] = { ...updated[idx], ...data.box };
-                return updated;
-              }
-              // Not found: Append new box
-              return [...prev, data.box];
-            });
-          }
-        } catch (err) {
-          console.error('Failed to parse WS message:', err);
+        // Full state snapshot: Replace entire boxes array
+        if (data.type === 'PUBLIC_STATE_SNAPSHOT' && Array.isArray(data.boxes)) {
+          setBoxes(data.boxes);
+        }
+        // Incremental update: Merge into existing box
+        else if (
+          ['BOX_STATUS_UPDATE', 'BOX_FLOW_UPDATE', 'BOX_RANKING_UPDATE'].includes(data.type) &&
+          data.box
+        ) {
+          setBoxes((prev) => {
+            const idx = prev.findIndex((b) => b.boxId === data.box.boxId);
+            if (idx >= 0) {
+              // Found: Merge update into existing box
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], ...data.box };
+              return updated;
+            }
+            // Not found: Append new box
+            return [...prev, data.box];
+          });
         }
       };
 
@@ -541,7 +486,7 @@ const PublicRankings: FC = () => {
         const attempt = reconnectAttemptsRef.current;
         if (attempt < MAX_RECONNECT_ATTEMPTS) {
           // Calculate exponential backoff delay: 1s * 2^attempt
-          const delay = 1000 * Math.pow(2, attempt);
+          const delay = backoffDelayMs(attempt, 1000, 600000);
           
           // Schedule reconnection
           reconnectTimeoutRef.current = setTimeout(() => {
@@ -655,13 +600,31 @@ const PublicRankings: FC = () => {
         };
       }
 
-      const payload = buildLineagePayload(box, targetPerf);
-      const lineageKey = `tb-lineage:${sha1Hex(payload)}`;
-      const lineageMap =
-        box.prevRoundsTiebreakLineageRanks &&
-        typeof box.prevRoundsTiebreakLineageRanks === 'object'
-          ? box.prevRoundsTiebreakLineageRanks[lineageKey]
+      let helperMembers: HelperMember[] = members;
+      let prevRanks: Record<string, number> | null =
+        row.tbPrevHelper && Object.keys(row.tbPrevHelper.prevRanksByName).length > 0
+          ? row.tbPrevHelper.prevRanksByName
           : null;
+
+      if (prevRanks && row.tbPrevHelper) {
+        const helperNames =
+          row.tbPrevHelper.members.length > 0
+            ? row.tbPrevHelper.members
+            : Object.keys(prevRanks);
+        helperMembers = helperNames.map((name) => {
+          const existing = members.find((member) => member.name === name);
+          if (existing) return existing;
+          const score = getRouteScore(box, name);
+          const perf = derivePerformance(score, activeHoldsCount);
+          return {
+            name,
+            holdsLabel: perf ? perf.holdsLabel : '—',
+            timeLabel: formatSeconds(getRouteTime(box, name)),
+            prevRank: null,
+          };
+        });
+      }
+
       const fallbackEvent = Array.isArray(box.leadTieEvents)
         ? box.leadTieEvents.find((ev) => {
             if (!ev || typeof ev !== 'object') return false;
@@ -679,9 +642,11 @@ const PublicRankings: FC = () => {
         fallbackEvent && typeof (fallbackEvent as any).known_prev_ranks_by_name === 'object'
           ? ((fallbackEvent as any).known_prev_ranks_by_name as Record<string, number>)
           : null;
-      const prevRanks = lineageMap || fallbackRanks || null;
+      if (prevRanks == null) {
+        prevRanks = fallbackRanks || null;
+      }
 
-      const withPrev = members.map((member) => ({
+      const withPrev = helperMembers.map((member) => ({
         ...member,
         prevRank:
           prevRanks && Number.isFinite(Number(prevRanks[member.name]))

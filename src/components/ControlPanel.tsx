@@ -19,9 +19,17 @@ import type {
   LoadingBoxes,
   TimeTiebreakEligibleGroup,
 } from '../types';
-import ModalUpload from './ModalUpload';
-import AdminExportOfficialView from './AdminExportOfficialView';
 import AdminAuditView from './AdminAuditView';
+import ControlPanelActionsSection from './control-panel/ControlPanelActionsSection';
+import ControlPanelPublicSection from './control-panel/ControlPanelPublicSection';
+import ControlPanelUploadSection from './control-panel/ControlPanelUploadSection';
+import ControlPanelExportSection from './control-panel/ControlPanelExportSection';
+import { connectControlPanelWs } from './control-panel/useControlPanelWs';
+import {
+  parseTimeCriterionValue,
+  readClimbingTime,
+  readTimeCriterionEnabled,
+} from './control-panel/useControlPanelState';
 import {
   startTimer,
   stopTimer,
@@ -113,6 +121,7 @@ type TimeTiebreakSnapshot = {
   hasEligibleTie: boolean;
   isResolved: boolean;
   eligibleGroups: TimeTiebreakEligibleGroup[];
+  historyGroups: TimeTiebreakEligibleGroup[];
   rankingRows: LeadRankingRowSnapshot[];
 };
 
@@ -188,45 +197,6 @@ const ClipboardDocumentListIcon: React.FC<IconProps> = (props) => (
     />
   </IconBase>
 );
-
-// Robustly read climbingTime from localStorage, handling JSON-quoted values
-const readClimbingTime = (): string => {
-  const raw = safeGetItem('climbingTime');
-  if (!raw) return '05:00';
-  try {
-    const v = safeGetJSON('climbingTime');
-    if (typeof v === 'string') return v;
-  } catch (err) {
-    debugLog('[readClimbingTime] Failed to parse JSON, using fallback regex:', err);
-  }
-  const m = raw.match(/^"?(\d{1,2}):(\d{2})"?$/);
-  if (m) {
-    const mm = m[1].padStart(2, '0');
-    const ss = m[2];
-    return `${mm}:${ss}`;
-  }
-  return raw;
-};
-
-// Read timeCriterion flag supporting both "on"/"off" and JSON booleans
-const parseTimeCriterionValue = (raw: string | null): boolean | null => {
-  if (raw === 'on') return true;
-  if (raw === 'off') return false;
-  if (!raw) return null;
-  try {
-    const parsed = safeGetJSON('timeCriterionEnabled');
-    return !!parsed;
-  } catch {
-    return null;
-  }
-};
-
-const readTimeCriterionEnabled = (boxId: number): boolean => {
-  const perBox = parseTimeCriterionValue(safeGetItem(`timeCriterionEnabled-${boxId}`));
-  if (perBox !== null) return perBox;
-  const legacy = parseTimeCriterionValue(safeGetItem('timeCriterionEnabled'));
-  return legacy ?? false;
-};
 
 const formatRegisteredSeconds = (seconds: number | null): string => {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return '—';
@@ -359,6 +329,7 @@ const ControlPanel: FC = () => {
   const [activeCompetitor, setActiveCompetitor] = useState<string>('');
   const [showScoreModal, setShowScoreModal] = useState<boolean>(false);
   const [showModifyModal, setShowModifyModal] = useState<boolean>(false);
+  const [showTieBreaksDialog, setShowTieBreaksDialog] = useState<boolean>(false);
   const [editList, setEditList] = useState<string[]>([]);
   const [editScores, setEditScores] = useState<Record<string, number>>({});
   const [editTimes, setEditTimes] = useState<Record<string, number | null | undefined>>({});
@@ -536,6 +507,88 @@ const ControlPanel: FC = () => {
     fingerprint: string,
     boxId: number,
   ): string => `${boxId}:${stage}:${fingerprint}`;
+
+  const mergeTieBreakHistoryGroups = (
+    previous: TimeTiebreakEligibleGroup[],
+    current: TimeTiebreakEligibleGroup[],
+    prevDecisions: Record<string, TimeTiebreakDecision>,
+    timeDecisions: Record<string, TimeTiebreakDecision>,
+  ): TimeTiebreakEligibleGroup[] => {
+    const byFingerprint: Record<string, TimeTiebreakEligibleGroup> = {};
+    previous.forEach((group) => {
+      if (!group?.fingerprint) return;
+      byFingerprint[group.fingerprint] = group;
+    });
+    current.forEach((group) => {
+      if (!group?.fingerprint) return;
+      byFingerprint[group.fingerprint] = group;
+    });
+
+    const currentFingerprints = new Set(current.map((group) => group.fingerprint));
+    Object.entries(byFingerprint).forEach(([fingerprint, group]) => {
+      const prevDecision = prevDecisions[fingerprint] ?? group.prevRoundsDecision ?? null;
+      const timeDecision = timeDecisions[fingerprint] ?? group.timeDecision ?? null;
+      const isCurrent = currentFingerprints.has(fingerprint);
+      let next: TimeTiebreakEligibleGroup = {
+        ...group,
+        prevRoundsDecision: prevDecision,
+        timeDecision,
+      };
+
+      if (!isCurrent) {
+        if (timeDecision) {
+          next = {
+            ...next,
+            stage: 'time',
+            status: 'resolved',
+            isResolved: true,
+            resolvedDecision: timeDecision,
+            resolutionKind: 'time',
+          };
+        } else if (prevDecision === 'yes') {
+          next = {
+            ...next,
+            stage: 'previous_rounds',
+            status: 'resolved',
+            isResolved: true,
+            resolutionKind: 'previous_rounds',
+          };
+        } else if (prevDecision === 'no') {
+          next = {
+            ...next,
+            stage: 'previous_rounds',
+            status: 'pending',
+            isResolved: false,
+            resolutionKind: null,
+          };
+        }
+      }
+      byFingerprint[fingerprint] = next;
+    });
+
+    return Object.values(byFingerprint).sort((a, b) => {
+      const statusA = a.status === 'resolved' || a.status === 'error' || a.status === 'pending'
+        ? a.status
+        : a.isResolved
+        ? 'resolved'
+        : 'pending';
+      const statusB = b.status === 'resolved' || b.status === 'error' || b.status === 'pending'
+        ? b.status
+        : b.isResolved
+        ? 'resolved'
+        : 'pending';
+      const bucket = (status: 'pending' | 'resolved' | 'error', affectsPodium?: boolean): number => {
+        if (status === 'pending') return affectsPodium ? 0 : 1;
+        if (status === 'resolved') return 2;
+        return 3;
+      };
+      const bucketA = bucket(statusA, a.affectsPodium);
+      const bucketB = bucket(statusB, b.affectsPodium);
+      if (bucketA !== bucketB) return bucketA - bucketB;
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      return String(a.fingerprint || '').localeCompare(String(b.fingerprint || ''));
+    });
+  };
 
   const prevRoundsDraftKey = (
     boxId: number,
@@ -875,6 +928,12 @@ const ControlPanel: FC = () => {
         hasEligibleTie,
         isResolved,
         eligibleGroups,
+        historyGroups: mergeTieBreakHistoryGroups(
+          prev[boxId]?.historyGroups ?? [],
+          eligibleGroups,
+          mergedPrevDecisions,
+          mergedDecisions,
+        ),
         rankingRows,
       },
     }));
@@ -1070,6 +1129,12 @@ const ControlPanel: FC = () => {
             hasEligibleTie: nextHasEligibleTie,
             isResolved: nextIsResolved,
             eligibleGroups: nextGroups,
+            historyGroups: mergeTieBreakHistoryGroups(
+              existing?.historyGroups ?? [],
+              nextGroups,
+              nextPrevDecisions,
+              existing?.decisions ?? {},
+            ),
             rankingRows: existing?.rankingRows ?? [],
           },
         };
@@ -1387,6 +1452,12 @@ const ControlPanel: FC = () => {
                           : nextGroups.length > 0,
                       isResolved: nextGroups.length > 0 ? nextGroups.every((g) => g.isResolved) : true,
                       eligibleGroups: nextGroups,
+                      historyGroups: mergeTieBreakHistoryGroups(
+                        existing?.historyGroups ?? [],
+                        nextGroups,
+                        existing?.prevDecisions ?? {},
+                        nextDecisions,
+                      ),
                       rankingRows: existing?.rankingRows ?? [],
                     },
                   };
@@ -1509,6 +1580,12 @@ const ControlPanel: FC = () => {
                           : nextGroups.length > 0,
                       isResolved: nextGroups.length > 0 ? nextGroups.every((g) => g.isResolved) : true,
                       eligibleGroups: nextGroups,
+                      historyGroups: mergeTieBreakHistoryGroups(
+                        existing?.historyGroups ?? [],
+                        nextGroups,
+                        nextPrevDecisions,
+                        existing?.decisions ?? {},
+                      ),
                       rankingRows: existing?.rankingRows ?? [],
                     },
                   };
@@ -1630,87 +1707,27 @@ const ControlPanel: FC = () => {
         }
         // WebSocket will use cookie for auth (no token in URL for security)
         const url = `${config.WS_PROTOCOL_CP}://${window.location.hostname}:8000/api/ws/${idx}`;
-        const ws = new WebSocket(url);
-        let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
-        let lastPong = Date.now();
-
-        ws.onopen = () => {
-          debugLog(`✅ WebSocket connected for box ${idx}`);
-          lastPong = Date.now();
-
-          // Start heartbeat monitoring
-          heartbeatInterval = setInterval(() => {
-            const now = Date.now();
-            const timeSinceLastPong = now - lastPong;
-
-            // If no PONG received for 60 seconds, reconnect
-            if (timeSinceLastPong > 60000) {
-              debugWarn(`⚠️ Heartbeat timeout for box ${idx}, closing connection...`);
-              ws.close();
-              return;
-            }
-
-            // Send PONG to keep connection alive (server sends PING)
-            if (ws.readyState === WebSocket.OPEN) {
-              try {
-                ws.send(JSON.stringify({ type: 'PONG', timestamp: now }));
-              } catch (err) {
-                debugError(`Failed to send PONG for box ${idx}:`, err);
-              }
-            }
-          }, 30000); // Every 30 seconds
-        };
-
-        ws.onmessage = (ev) => {
-          try {
-            const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
-
-            // Handle PING from server
-            if (msg.type === 'PING') {
-              lastPong = Date.now();
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'PONG', timestamp: msg.timestamp }));
-              }
-              return;
-            }
-
-            handleMessage(msg);
-          } catch (err) {
-            debugError(`Error parsing WebSocket message for box ${idx}:`, err);
-          }
-        };
-
-        ws.onerror = (err) => {
-          debugError(`❌ WebSocket error for box ${idx}:`, err);
-        };
-
-        ws.onclose = () => {
-          debugLog(`🔌 WebSocket closed for box ${idx}`);
-          if (heartbeatInterval) {
-            clearInterval(heartbeatInterval);
-          }
-          delete wsRefs.current[idx];
-
-          // Auto-reconnect after 2 seconds if this box still exists
-          setTimeout(() => {
+        const { ws, disconnect } = connectControlPanelWs({
+          idx,
+          url,
+          onMessage: handleMessage,
+          onClosed: () => {
+            delete wsRefs.current[idx];
+          },
+          onReconnectRequested: () => {
             const stillExists = listboxes.some((_, i) => i === idx);
             if (stillExists && !wsRefs.current[idx]) {
-              debugLog(`🔄 Auto-reconnecting WebSocket for box ${idx}...`);
-              // Trigger re-render to recreate connection
               setListboxes((prev) => [...prev]);
             }
-          }, 2000);
-        };
+          },
+          shouldReconnect: () => listboxes.some((_, i) => i === idx) && !wsRefs.current[idx],
+          debugLog,
+          debugWarn,
+          debugError,
+        });
 
         wsRefs.current[String(idx)] = ws;
-        disconnectFnsRef.current[String(idx)] = () => {
-          if (heartbeatInterval) {
-            clearInterval(heartbeatInterval);
-          }
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.close();
-          }
-        };
+        disconnectFnsRef.current[String(idx)] = disconnect;
       }
     });
 
@@ -2505,6 +2522,7 @@ const ControlPanel: FC = () => {
           hasEligibleTie: false,
           isResolved: true,
           eligibleGroups: [],
+          historyGroups: [],
           rankingRows: [],
         },
       }));
@@ -3598,6 +3616,15 @@ const ControlPanel: FC = () => {
     handleCeremony(scoringBoxId, category, localPodium);
   };
 
+  const openShowTieBreaksDialog = (): void => {
+    if (scoringBoxId == null) return;
+    setShowTieBreaksDialog(true);
+  };
+
+  const closeShowTieBreaksDialog = (): void => {
+    setShowTieBreaksDialog(false);
+  };
+
   // Copy the judge QR URL to clipboard (with a legacy fallback).
   const handleCopyQrUrl = async (): Promise<void> => {
     if (!adminQrUrl) return;
@@ -3740,6 +3767,12 @@ const ControlPanel: FC = () => {
     }
   }, [listboxes, scoringBoxId]);
 
+  useEffect(() => {
+    if (!showTieBreaksDialog) return;
+    if (scoringBoxId != null) return;
+    setShowTieBreaksDialog(false);
+  }, [showTieBreaksDialog, scoringBoxId]);
+
   // Keep the "judge access" selector valid when boxes are added/removed.
   useEffect(() => {
     if (listboxes.length == 0) {
@@ -3766,6 +3799,49 @@ const ControlPanel: FC = () => {
   const scoringBoxHasMarked =
     !!scoringBox?.concurenti?.some((c) => c.marked);
   const scoringEnabled = initiatedBoxIds.length > 0;
+  const showTieBreaksEnabled = scoringBoxSelected;
+  const scoringTieBreakSnapshot =
+    scoringBoxId != null ? timeTiebreakByBox[scoringBoxId] : undefined;
+  const scoringTieBreakGroups = Array.isArray(scoringTieBreakSnapshot?.historyGroups)
+    ? scoringTieBreakSnapshot?.historyGroups
+    : [];
+  const scoringTieBreakGroupsSorted = [...scoringTieBreakGroups].sort((a, b) => {
+    const statusA = a.status === 'resolved' || a.status === 'error' || a.status === 'pending'
+      ? a.status
+      : a.isResolved
+      ? 'resolved'
+      : 'pending';
+    const statusB = b.status === 'resolved' || b.status === 'error' || b.status === 'pending'
+      ? b.status
+      : b.isResolved
+      ? 'resolved'
+      : 'pending';
+    const bucket = (status: 'pending' | 'resolved' | 'error', affectsPodium?: boolean): number => {
+      if (status === 'pending') return affectsPodium ? 0 : 1;
+      if (status === 'resolved') return 2;
+      return 3;
+    };
+    const bucketA = bucket(statusA, a.affectsPodium);
+    const bucketB = bucket(statusB, b.affectsPodium);
+    if (bucketA !== bucketB) return bucketA - bucketB;
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    return String(a.fingerprint || '').localeCompare(String(b.fingerprint || ''));
+  });
+  const scoringTieBreakSummary = scoringTieBreakGroups.reduce(
+    (acc, group) => {
+      const status =
+        group.status === 'resolved' || group.status === 'error' || group.status === 'pending'
+          ? group.status
+          : group.isResolved
+          ? 'resolved'
+          : 'pending';
+      if (status === 'pending') acc.pending += 1;
+      if (status === 'resolved') acc.resolved += 1;
+      if (status === 'error') acc.error += 1;
+      return acc;
+    },
+    { pending: 0, resolved: 0, error: 0 },
+  );
 
   const judgeAccessBox =
     judgeAccessBoxId != null ? listboxes[judgeAccessBoxId] : null;
@@ -3877,211 +3953,54 @@ const ControlPanel: FC = () => {
               ) : (
                 <>
                   {adminActionsView === 'actions' && (
-                    <div className="space-y-4">
-
-	                      <div className="grid grid-cols-[repeat(3,minmax(260px,1fr))] gap-3 overflow-x-auto">
-                        <div className={styles.adminCard}>
-                          <div className={styles.adminCardTitle}>Scoring</div>
-                          <label className={styles.modalField}>
-                            <span className={styles.modalLabel}>Select category</span>
-                            <select
-                              className={styles.modalSelect}
-                              value={scoringBoxId ?? ''}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                setScoringBoxId(value === '' ? null : Number(value));
-                              }}
-                              disabled={!scoringEnabled}
-                            >
-                              {scoringEnabled ? (
-                                initiatedBoxIds.map((idx) => (
-                                  <option key={idx} value={idx}>
-                                    {sanitizeBoxName(listboxes[idx].categorie || `Box ${idx}`)}
-                                  </option>
-                                ))
-                              ) : (
-                                <option value="">No initiated boxes</option>
-                              )}
-                            </select>
-                          </label>
-                          {!scoringEnabled && (
-                            <div className="text-xs" style={{ color: 'var(--text-tertiary)', marginTop: '8px' }}>
-                              upload a category and initiate contest
-                            </div>
-                          )}
-                          <div className="mt-3 flex flex-col gap-2">
-                          <button
-                            className="modern-btn modern-btn-ghost"
-                            onClick={openModifyScoreFromAdmin}
-                            disabled={!scoringBoxSelected || !scoringBoxHasMarked}
-                            type="button"
-                          >
-                            Modify score
-                          </button>
-                          <button
-                            className="modern-btn modern-btn-ghost"
-                            onClick={openCeremonyFromAdmin}
-                            disabled={!scoringBoxSelected}
-                            type="button"
-                          >
-                            Award ceremony
-                          </button>
-                          </div>
-                        </div>
-
-                        <div className={styles.adminCard}>
-                          <div className={styles.adminCardTitle}>Judge access</div>
-                          <label className={styles.modalField}>
-                            <span className={styles.modalLabel}>Select category</span>
-                            <select
-                              className={styles.modalSelect}
-                              value={judgeAccessBoxId ?? ''}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                setJudgeAccessBoxId(value === '' ? null : Number(value));
-                              }}
-                              disabled={!judgeAccessEnabled}
-                            >
-                              {judgeAccessEnabled ? (
-                                listboxes.map((b, idx) => (
-                                  <option key={idx} value={idx}>
-                                    {sanitizeBoxName(b.categorie || `Box ${idx}`)}
-                                  </option>
-                                ))
-                              ) : (
-                                <option value="">No boxes available</option>
-                              )}
-                            </select>
-                          </label>
-                          {!judgeAccessEnabled && (
-                            <div className="text-xs" style={{ color: 'var(--text-tertiary)', marginTop: '8px' }}>
-                              upload a category and initiate contest
-                            </div>
-                          )}
-                          <div className="mt-3 flex flex-col gap-2">
-                          <button
-                            className="modern-btn modern-btn-ghost"
-                            onClick={() => {
-                              if (judgeAccessBoxId == null) return;
-                              openSetJudgePasswordDialog(judgeAccessBoxId);
-                            }}
-                            disabled={!judgeAccessSelected}
-                            type="button"
-                          >
-                            Set judge password
-                          </button>
-                          <button
-                            className="modern-btn modern-btn-ghost"
-                            onClick={() => {
-                              if (judgeAccessBoxId == null) return;
-                              openQrDialog(judgeAccessBoxId);
-                            }}
-                            disabled={!judgeAccessSelected}
-                            type="button"
-                          >
-                            Generate QR
-                          </button>
-                          <button
-                            className="modern-btn modern-btn-ghost"
-                            onClick={openJudgeViewFromAdmin}
-                            disabled={!judgeAccessSelected || !judgeAccessBox?.initiated}
-                            type="button"
-                          >
-                            Open judge view
-                          </button>
-                          </div>
-                        </div>
-
-                        <div className={styles.adminCard}>
-                          <div className={styles.adminCardTitle}>Setup</div>
-                          <label className={styles.modalField}>
-                            <span className={styles.modalLabel}>Select category</span>
-                            <select
-                              className={styles.modalSelect}
-                              value={setupBoxId ?? (listboxes.length > 0 ? 0 : '')}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                setSetupBoxId(value === '' ? null : Number(value));
-                              }}
-                              disabled={listboxes.length === 0}
-                            >
-                              {listboxes.length === 0 ? (
-                                <option value="">No boxes available</option>
-                              ) : (
-                                listboxes.map((b, idx) => (
-                                  <option key={idx} value={idx}>
-                                    {sanitizeBoxName(b.categorie || `Box ${idx}`)}
-                                  </option>
-                                ))
-                              )}
-                            </select>
-                          </label>
-                          <div className="flex flex-col gap-2 mt-3">
-                          <button
-                            className="modern-btn modern-btn-ghost"
-                            onClick={() => openBoxTimerDialog(setupBoxId)}
-                            disabled={setupBoxId == null}
-                            type="button"
-                          >
-                            Set timer
-                          </button>
-                          <button
-                            className="modern-btn modern-btn-ghost"
-                            onClick={() => openRoutesetterDialog(setupBoxId)}
-                            disabled={setupBoxId == null}
-                            type="button"
-                          >
-                            Set competition officials
-                          </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <ControlPanelActionsSection
+                      styles={styles as unknown as Record<string, string>}
+                      listboxes={listboxes}
+                      initiatedBoxIds={initiatedBoxIds}
+                      scoringEnabled={scoringEnabled}
+                      scoringBoxId={scoringBoxId}
+                      setScoringBoxId={setScoringBoxId}
+                      scoringBoxSelected={scoringBoxSelected}
+                      scoringBoxHasMarked={scoringBoxHasMarked}
+                      showTieBreaksEnabled={showTieBreaksEnabled}
+                      openModifyScoreFromAdmin={openModifyScoreFromAdmin}
+                      openCeremonyFromAdmin={openCeremonyFromAdmin}
+                      openShowTieBreaksDialog={openShowTieBreaksDialog}
+                      judgeAccessEnabled={judgeAccessEnabled}
+                      judgeAccessBoxId={judgeAccessBoxId}
+                      setJudgeAccessBoxId={setJudgeAccessBoxId}
+                      judgeAccessSelected={judgeAccessSelected}
+                      judgeAccessBox={judgeAccessBox}
+                      openSetJudgePasswordDialog={openSetJudgePasswordDialog}
+                      openQrDialog={openQrDialog}
+                      openJudgeViewFromAdmin={openJudgeViewFromAdmin}
+                      setupBoxId={setupBoxId}
+                      setSetupBoxId={setSetupBoxId}
+                      openBoxTimerDialog={openBoxTimerDialog}
+                      openRoutesetterDialog={openRoutesetterDialog}
+                    />
                   )}
 
                   {adminActionsView === 'public' && (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-[repeat(2,minmax(260px,1fr))] gap-3 overflow-x-auto">
-                        <div className={styles.adminCard}>
-                          <div className={styles.adminCardTitle}>Public View</div>
-                          <div className="flex flex-col gap-2 mt-3">
-                            <button
-                              className="modern-btn modern-btn-ghost"
-                              onClick={openPublicQrDialog}
-                              type="button"
-                            >
-                              Show public QR
-                            </button>
-                            <button
-                              className="modern-btn modern-btn-ghost"
-                              onClick={() => {
-                                window.open(`${window.location.origin}/#/rankings`, '_blank');
-                              }}
-                              type="button"
-                            >
-                              Open public rankings
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <ControlPanelPublicSection
+                      styles={styles as unknown as Record<string, string>}
+                      openPublicQrDialog={openPublicQrDialog}
+                      openPublicRankings={() => {
+                        window.open(`${window.location.origin}/#/rankings`, '_blank');
+                      }}
+                    />
                   )}
 
                   {adminActionsView === 'upload' && (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-[repeat(1,minmax(320px,560px))] gap-3">
-                        <ModalUpload
-                          isOpen={adminActionsView === 'upload'}
-                          embedded
-                          onClose={() => setAdminActionsView('actions')}
-                          onUpload={handleUpload}
-                        />
-                      </div>
-                    </div>
+                    <ControlPanelUploadSection
+                      isOpen={adminActionsView === 'upload'}
+                      onClose={() => setAdminActionsView('actions')}
+                      onUpload={handleUpload}
+                    />
                   )}
 
                   {adminActionsView === 'export' && (
-                    <AdminExportOfficialView
+                    <ControlPanelExportSection
                       listboxes={listboxes}
                       exportBoxId={exportBoxId}
                       onChangeExportBoxId={setExportBoxId}
@@ -4186,11 +4105,9 @@ const ControlPanel: FC = () => {
                               {sanitizeCompetitorName(member.name)}
                             </span>
                             <span style={{ color: 'var(--text-secondary)' }}>
-                              {`Nr. of Holds ${
+                              {`GM Total ${
                                 typeof member.value === 'number'
-                                  ? Number.isInteger(member.value)
-                                    ? member.value.toFixed(0)
-                                    : member.value.toFixed(1)
+                                  ? member.value.toFixed(3)
                                   : '—'
                               }`}
                             </span>
@@ -4291,6 +4208,208 @@ const ControlPanel: FC = () => {
                   </>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTieBreaksDialog && (
+        <div className={styles.modalOverlay}>
+          <div className={styles.modalCard}>
+            <div className={styles.modalHeader}>
+              <div>
+                <div className={styles.modalTitle}>Tie-break overview</div>
+                <div className={styles.modalSubtitle}>
+                  {`Category: ${sanitizeBoxName(
+                    scoringBox?.categorie || (scoringBoxId != null ? `Box ${scoringBoxId}` : '—'),
+                  )}`}
+                </div>
+              </div>
+            </div>
+            <div className={styles.modalContent}>
+              {!scoringTieBreakSnapshot ? (
+                <div className={styles.modalAlert}>
+                  No tie-break data available for this category yet.
+                </div>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                      gap: '8px',
+                    }}
+                  >
+                    <div className={styles.modalAlert} style={{ margin: 0 }}>
+                      <div style={{ fontSize: '11px', opacity: 0.8 }}>Time criterion</div>
+                      <div style={{ fontWeight: 700 }}>
+                        {getTimeCriterionEnabled(scoringBoxId ?? 0) ? 'ON' : 'OFF'}
+                      </div>
+                    </div>
+                    <div className={styles.modalAlert} style={{ margin: 0 }}>
+                      <div style={{ fontSize: '11px', opacity: 0.8 }}>Has eligible tie</div>
+                      <div style={{ fontWeight: 700 }}>
+                        {scoringTieBreakSnapshot.hasEligibleTie ? 'Yes' : 'No'}
+                      </div>
+                    </div>
+                    <div className={styles.modalAlert} style={{ margin: 0 }}>
+                      <div style={{ fontSize: '11px', opacity: 0.8 }}>Ranking resolved</div>
+                      <div style={{ fontWeight: 700 }}>
+                        {scoringTieBreakSnapshot.isResolved ? 'Yes' : 'No'}
+                      </div>
+                    </div>
+                    <div className={styles.modalAlert} style={{ margin: 0 }}>
+                      <div style={{ fontSize: '11px', opacity: 0.8 }}>Total events</div>
+                      <div style={{ fontWeight: 700 }}>{scoringTieBreakGroups.length}</div>
+                    </div>
+                    <div className={styles.modalAlert} style={{ margin: 0 }}>
+                      <div style={{ fontSize: '11px', opacity: 0.8 }}>Pending</div>
+                      <div style={{ fontWeight: 700 }}>{scoringTieBreakSummary.pending}</div>
+                    </div>
+                    <div className={styles.modalAlert} style={{ margin: 0 }}>
+                      <div style={{ fontSize: '11px', opacity: 0.8 }}>Resolved / Error</div>
+                      <div style={{ fontWeight: 700 }}>
+                        {`${scoringTieBreakSummary.resolved} / ${scoringTieBreakSummary.error}`}
+                      </div>
+                    </div>
+                  </div>
+
+                  {scoringTieBreakGroupsSorted.length === 0 ? (
+                    <div className={styles.modalAlert}>
+                      No tie-break events recorded for this category.
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        maxHeight: '48vh',
+                        overflowY: 'auto',
+                        paddingRight: '4px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px',
+                      }}
+                    >
+                      {scoringTieBreakGroupsSorted.map((group) => {
+                        const status =
+                          group.status === 'resolved' ||
+                          group.status === 'error' ||
+                          group.status === 'pending'
+                            ? group.status
+                            : group.isResolved
+                            ? 'resolved'
+                            : 'pending';
+                        const stageLabel = group.stage === 'time' ? 'TB Time' : 'TB Prev';
+                        const contextLabel = group.context === 'route' ? 'Active route' : 'Overall';
+                        return (
+                          <div
+                            key={`tb-overview-${group.fingerprint}`}
+                            style={{
+                              border: '1px solid var(--border-medium)',
+                              borderRadius: 'var(--radius-md)',
+                              padding: '10px 12px',
+                              background: 'rgba(0, 0, 0, 0.25)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '8px',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '8px',
+                                flexWrap: 'wrap',
+                                fontSize: '12px',
+                              }}
+                            >
+                              <strong style={{ color: 'var(--text-primary)' }}>
+                                {`${contextLabel} rank #${group.rank}`}
+                              </strong>
+                              <span style={{ color: 'var(--text-secondary)' }}>{stageLabel}</span>
+                              <span style={{ color: 'var(--text-secondary)' }}>
+                                {group.affectsPodium ? 'Podium' : 'Non-podium'}
+                              </span>
+                              <span
+                                style={{
+                                  color:
+                                    status === 'resolved'
+                                      ? '#22c55e'
+                                      : status === 'error'
+                                      ? '#f43f5e'
+                                      : '#f59e0b',
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {status.toUpperCase()}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              {group.members.map((member) => (
+                                <div
+                                  key={`tb-overview-member-${group.fingerprint}-${member.name}`}
+                                  style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: 'minmax(120px,1fr) auto auto',
+                                    gap: '8px',
+                                    fontSize: '12px',
+                                    color: 'var(--text-secondary)',
+                                  }}
+                                >
+                                  <span style={{ color: 'var(--text-primary)' }}>
+                                    {sanitizeCompetitorName(member.name)}
+                                  </span>
+                                  <span>
+                                    {`Total ${
+                                      typeof member.value === 'number' ? member.value.toFixed(3) : '—'
+                                    }`}
+                                  </span>
+                                  <span>{`Time ${formatRegisteredSeconds(member.time)}`}</span>
+                                </div>
+                              ))}
+                            </div>
+                            {(group.prevRoundsDecision || group.timeDecision) && (
+                              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                {`Decisions: Prev ${group.prevRoundsDecision ?? '—'} | Time ${group.timeDecision ?? '—'}`}
+                              </div>
+                            )}
+                            {group.knownPrevRanksByName &&
+                              Object.keys(group.knownPrevRanksByName).length > 0 && (
+                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                  {`Known previous ranks: ${Object.entries(group.knownPrevRanksByName)
+                                    .map(([name, rank]) => `${sanitizeCompetitorName(name)}=${rank}`)
+                                    .join(', ')}`}
+                                </div>
+                              )}
+                            {Array.isArray(group.missingPrevRoundsMembers) &&
+                              group.missingPrevRoundsMembers.length > 0 && (
+                                <div style={{ fontSize: '12px', color: '#f59e0b' }}>
+                                  {`Missing previous ranks: ${group.missingPrevRoundsMembers
+                                    .map((name) => sanitizeCompetitorName(name))
+                                    .join(', ')}`}
+                                </div>
+                              )}
+                            {group.requiresPrevRoundsInput && (
+                              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                Previous-rounds input required.
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className={styles.modalActions}>
+              <button
+                className="modern-btn modern-btn-ghost"
+                onClick={closeShowTieBreaksDialog}
+                type="button"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
