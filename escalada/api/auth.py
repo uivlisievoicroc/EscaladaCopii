@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from escalada.auth.deps import get_current_claims, require_role
 from escalada.auth.service import create_access_token, hash_password, verify_password
-from escalada.storage.json_store import get_users_with_default_admin, save_users
+from escalada.storage.json_store import load_users, save_users
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +47,16 @@ class TokenResponse(BaseModel):
 
 @router.post("/auth/login", response_model=TokenResponse)
 async def login(payload: LoginRequest, response: Response) -> TokenResponse:
-    users = get_users_with_default_admin()
+    users = load_users()
     requested = payload.username
     canonical = _canonical_username(requested)
+
+    if canonical.casefold() == "admin":
+        logger.warning("Admin password login blocked for %s", payload.username)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin_password_login_disabled",
+        )
 
     user_key = requested
     user = users.get(user_key) or users.get(canonical)
@@ -68,6 +75,12 @@ async def login(payload: LoginRequest, response: Response) -> TokenResponse:
                 user_key = k
                 user = v
                 break
+    if user and (user.get("role") or "").casefold() == "admin":
+        logger.warning("Admin password login blocked for %s", payload.username)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin_password_login_disabled",
+        )
     if not user or not user.get("is_active", True):
         logger.warning("Login failed for %s: user not found or inactive", payload.username)
         raise HTTPException(
@@ -151,7 +164,7 @@ async def set_judge_password(
     claims=Depends(require_role(["admin"])),
 ):
     """Setează/creează parola pentru userul judge al box-ului (implicit username=Box {id})."""
-    users = get_users_with_default_admin()
+    users = load_users()
     raw_username = payload.username or f"Box {box_id}"
     username = _canonical_username(raw_username) or f"Box {box_id}"
     alias_username = _canonical_username(f"Box {box_id}") or f"Box {box_id}"

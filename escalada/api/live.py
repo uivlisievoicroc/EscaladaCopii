@@ -48,6 +48,7 @@ from escalada_core import (
     validate_session_and_version,
 )
 from escalada.auth.deps import (
+    is_trusted_admin_ip,
     require_box_access,
     require_view_access,
     require_view_box_access,
@@ -742,19 +743,25 @@ async def websocket_endpoint(ws: WebSocket, box_id: int):
     # Try to get token from query params first (backwards compatible), then from cookie
     token = ws.query_params.get("token")
     if not token:
-        # Try httpOnly cookie
         token = ws.cookies.get("escalada_token")
 
-    if not token:
+    if token:
+        try:
+            claims = decode_token(token)
+        except HTTPException as exc:
+            logger.warning(
+                "WS connect denied: invalid_token box=%s ip=%s detail=%s",
+                box_id,
+                peer,
+                exc.detail,
+            )
+            await ws.close(code=4401, reason=exc.detail or "invalid_token")
+            return
+    elif is_trusted_admin_ip(peer):
+        claims = {"sub": "trusted-admin", "role": "admin", "boxes": []}
+    else:
         logger.warning("WS connect denied: token_required box=%s ip=%s", box_id, peer)
         await ws.close(code=4401, reason="token_required")
-        return
-
-    try:
-        claims = decode_token(token)
-    except HTTPException as exc:
-        logger.warning("WS connect denied: invalid_token box=%s ip=%s detail=%s", box_id, peer, exc.detail)
-        await ws.close(code=4401, reason=exc.detail or "invalid_token")
         return
 
     if not _authorize_ws(box_id, claims):

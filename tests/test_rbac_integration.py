@@ -49,6 +49,11 @@ def reset_state_map():
     live.state_map.clear()
 
 
+@pytest.fixture(autouse=True)
+def default_trusted_admin_ips(monkeypatch):
+    monkeypatch.setenv("ADMIN_TRUSTED_IPS", "127.0.0.1,::1,localhost")
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -65,6 +70,14 @@ def test_ws_requires_token(client: TestClient):
         with client.websocket_connect("/api/ws/1"):
             pass
     assert exc.value.code == 4401
+
+
+def test_ws_trusted_admin_ip_allowed_without_token(client: TestClient, monkeypatch):
+    monkeypatch.setenv("ADMIN_TRUSTED_IPS", "testclient")
+    with client.websocket_connect("/api/ws/1") as ws:
+        msg = ws.receive_json()
+    assert msg.get("type") == "STATE_SNAPSHOT"
+    assert msg.get("boxId") == 1
 
 
 def test_ws_forbidden_box(client: TestClient):

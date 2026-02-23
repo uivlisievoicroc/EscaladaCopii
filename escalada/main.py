@@ -60,11 +60,6 @@ def _is_weak_jwt_secret(secret: str | None) -> bool:
     return not normalized or normalized == "dev-secret-change-me"
 
 
-def _is_weak_default_admin_password(password: str | None) -> bool:
-    normalized = (password or "").strip()
-    return not normalized or normalized == "admin"
-
-
 # JWT secret is required for production deployments (dev default is intentionally flagged).
 _jwt_secret = os.getenv("JWT_SECRET")
 if _is_weak_jwt_secret(_jwt_secret):
@@ -75,13 +70,6 @@ if _is_weak_jwt_secret(_jwt_secret):
     logger.warning(
         "JWT_SECRET is missing or uses the default value; set a strong JWT_SECRET in the environment for production."
     )
-
-_default_admin_password = os.getenv("DEFAULT_ADMIN_PASSWORD")
-if _is_weak_default_admin_password(_default_admin_password):
-    if _is_production_env():
-        raise RuntimeError(
-            "Unsafe production configuration: DEFAULT_ADMIN_PASSWORD is missing or uses the default value 'admin'."
-        )
 
 # Background task tuning (minutes) + backup storage location.
 BACKUP_INTERVAL_MIN = int(os.getenv("BACKUP_INTERVAL_MIN", "10"))

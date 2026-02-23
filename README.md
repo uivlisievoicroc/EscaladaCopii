@@ -27,9 +27,18 @@ poetry run uvicorn escalada.main:app --host 0.0.0.0 --port 8000 --workers 1
 In production (`ENV=production` or `APP_ENV=production`), startup fails fast when unsafe defaults are used:
 
 - `JWT_SECRET` missing or equal to `dev-secret-change-me`
-- `DEFAULT_ADMIN_PASSWORD` missing/empty or equal to `admin`
 
-Set strong values before starting the API.
+Set a strong `JWT_SECRET` before starting the API.
+
+## Trusted Network Admin (no username/password)
+
+Admin endpoints no longer use username/password login.
+
+- If a request has a valid JWT, role checks work exactly as before.
+- If a request has no JWT and source IP is trusted, backend grants synthetic admin claims (`trusted-admin`).
+- Trusted IP allowlist is configured with `ADMIN_TRUSTED_IPS` (comma-separated, default: `127.0.0.1,::1,localhost`).
+
+Do not expose the API publicly without network protections (reverse proxy allowlists, VPN, firewall), because trusted IPs bypass admin login.
 
 ## Tests
 

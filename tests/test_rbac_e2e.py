@@ -1,11 +1,10 @@
-import json
-
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+import escalada.api.auth as auth_api
 import escalada.api.live as live
-from escalada.auth.service import create_access_token
+from escalada.auth.service import create_access_token, hash_password
 from escalada.main import app
 
 
@@ -53,6 +52,11 @@ def disable_validation(monkeypatch):
     live.VALIDATION_ENABLED = old
 
 
+@pytest.fixture(autouse=True)
+def default_trusted_admin_ips(monkeypatch):
+    monkeypatch.setenv("ADMIN_TRUSTED_IPS", "127.0.0.1,::1,localhost")
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -67,6 +71,24 @@ def _token(role: str, boxes=None) -> str:
 def test_cmd_requires_auth(client: TestClient):
     res = client.post("/api/cmd", json={"boxId": 1, "type": "INIT_ROUTE"})
     assert res.status_code == 401
+
+
+def test_admin_endpoint_requires_auth_when_ip_untrusted(client: TestClient):
+    res = client.get("/api/admin/audit/events")
+    assert res.status_code == 401
+
+
+def test_cmd_trusted_admin_ip_allowed_without_token(client: TestClient, monkeypatch):
+    monkeypatch.setenv("ADMIN_TRUSTED_IPS", "testclient")
+    res = client.post("/api/cmd", json={"boxId": 1, "type": "INIT_ROUTE", "holdsCount": 5})
+    assert res.status_code == 200
+    assert res.json()["status"] == "ok"
+
+
+def test_admin_endpoint_trusted_admin_ip_allowed_without_token(client: TestClient, monkeypatch):
+    monkeypatch.setenv("ADMIN_TRUSTED_IPS", "testclient")
+    res = client.get("/api/admin/audit/events")
+    assert res.status_code == 200
 
 
 def test_cmd_forbidden_box(client: TestClient):
@@ -108,3 +130,45 @@ def test_ws_judge_forbidden_box(client: TestClient):
         with client.websocket_connect(f"/api/ws/1?token={token}") as ws:
             ws.receive_text()
     assert exc.value.code == 4403
+
+
+def test_admin_password_login_is_disabled(client: TestClient, monkeypatch):
+    monkeypatch.setattr(auth_api, "load_users", lambda: {})
+    res = client.post("/api/auth/login", json={"username": "admin", "password": "ignored"})
+    assert res.status_code == 403
+    assert res.json()["detail"] == "admin_password_login_disabled"
+
+
+def test_admin_role_password_login_is_disabled(client: TestClient, monkeypatch):
+    users = {
+        "ops-admin": {
+            "username": "ops-admin",
+            "password_hash": hash_password("secret"),
+            "role": "admin",
+            "assigned_boxes": [],
+            "is_active": True,
+        }
+    }
+    monkeypatch.setattr(auth_api, "load_users", lambda: users)
+    res = client.post("/api/auth/login", json={"username": "ops-admin", "password": "secret"})
+    assert res.status_code == 403
+    assert res.json()["detail"] == "admin_password_login_disabled"
+
+
+def test_judge_login_still_works(client: TestClient, monkeypatch):
+    users = {
+        "Box 1": {
+            "username": "Box 1",
+            "password_hash": hash_password("judge-pass"),
+            "role": "judge",
+            "assigned_boxes": [1],
+            "is_active": True,
+        }
+    }
+    monkeypatch.setattr(auth_api, "load_users", lambda: users)
+    res = client.post("/api/auth/login", json={"username": "Box 1", "password": "judge-pass"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["role"] == "judge"
+    assert body["boxes"] == [1]
+    assert "escalada_token" in res.cookies

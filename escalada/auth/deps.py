@@ -4,6 +4,7 @@ Authentication/authorization dependencies for FastAPI routes.
 These helpers implement the common access-control rules used across the API:
 - Extract JWT from either Authorization header (legacy) or httpOnly cookie (preferred)
 - Decode/validate JWT and expose its claims to route handlers
+- For missing JWT, grant synthetic admin claims only for trusted network IPs
 - Enforce role-based access (admin/judge/viewer/spectator)
 - Enforce per-box access for roles that are scoped to specific boxes
 
@@ -14,6 +15,7 @@ Claims shape (see `escalada.auth.service.create_access_token`):
 """
 
 # -------------------- Standard library imports --------------------
+import os
 from typing import Any, Dict, Iterable, Optional
 
 # -------------------- Third-party imports --------------------
@@ -25,11 +27,27 @@ from escalada.auth.service import decode_token
 
 # Cookie name must match auth.py
 COOKIE_NAME = "escalada_token"
+DEFAULT_ADMIN_TRUSTED_IPS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 # OAuth2PasswordBearer provides the "Authorization: Bearer <token>" parsing.
 # We set `auto_error=False` so cookie auth can be used as a fallback without FastAPI
 # raising a 401 before our custom logic runs.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+
+def _parse_admin_trusted_ips(raw: str | None) -> set[str]:
+    if raw is None:
+        return set(DEFAULT_ADMIN_TRUSTED_IPS)
+    values = {entry.strip().lower() for entry in raw.split(",") if entry.strip()}
+    return values or set(DEFAULT_ADMIN_TRUSTED_IPS)
+
+
+def is_trusted_admin_ip(host: str | None) -> bool:
+    normalized_host = (host or "").strip().lower()
+    if not normalized_host:
+        return False
+    trusted_ips = _parse_admin_trusted_ips(os.getenv("ADMIN_TRUSTED_IPS"))
+    return normalized_host in trusted_ips
 
 
 def _parse_box_id(value: Any) -> int | None:
@@ -47,7 +65,7 @@ def _parse_box_id(value: Any) -> int | None:
 async def get_token_from_request(
     request: Request,
     header_token: Optional[str] = Depends(oauth2_scheme),
-) -> str:
+) -> Optional[str]:
     """
     Extract JWT token from:
     1. Authorization header (Bearer token) - for backwards compatibility
@@ -62,21 +80,30 @@ async def get_token_from_request(
     if cookie_token:
         return cookie_token
 
-    # No token found
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="not_authenticated",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    return None
 
 
-async def get_current_claims(token: str = Depends(get_token_from_request)) -> Dict[str, Any]:
+async def get_current_claims(
+    request: Request,
+    token: Optional[str] = Depends(get_token_from_request),
+) -> Dict[str, Any]:
     """
     Decode the JWT and return its claims.
 
     `decode_token()` raises HTTPException for invalid/expired tokens; those propagate to the client.
     """
-    return decode_token(token)
+    if token:
+        return decode_token(token)
+
+    peer = request.client.host if request.client else None
+    if is_trusted_admin_ip(peer):
+        return {"sub": "trusted-admin", "role": "admin", "boxes": []}
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="not_authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def require_role(allowed: Iterable[str]):

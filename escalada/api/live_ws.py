@@ -9,6 +9,8 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from starlette.websockets import WebSocket
 
+from escalada.auth.deps import is_trusted_admin_ip
+
 
 async def heartbeat(
     ws: WebSocket,
@@ -148,21 +150,23 @@ async def handle_private_websocket(
     peer = ws.client.host if ws.client else None
 
     token = ws.query_params.get("token") or ws.cookies.get("escalada_token")
-    if not token:
+    if token:
+        try:
+            claims = decode_token(token)
+        except HTTPException as exc:
+            logger.warning(
+                "WS connect denied: invalid_token box=%s ip=%s detail=%s",
+                box_id,
+                peer,
+                exc.detail,
+            )
+            await ws.close(code=4401, reason=exc.detail or "invalid_token")
+            return
+    elif is_trusted_admin_ip(peer):
+        claims = {"sub": "trusted-admin", "role": "admin", "boxes": []}
+    else:
         logger.warning("WS connect denied: token_required box=%s ip=%s", box_id, peer)
         await ws.close(code=4401, reason="token_required")
-        return
-
-    try:
-        claims = decode_token(token)
-    except HTTPException as exc:
-        logger.warning(
-            "WS connect denied: invalid_token box=%s ip=%s detail=%s",
-            box_id,
-            peer,
-            exc.detail,
-        )
-        await ws.close(code=4401, reason=exc.detail or "invalid_token")
         return
 
     if not authorize_ws_fn(box_id, claims):
