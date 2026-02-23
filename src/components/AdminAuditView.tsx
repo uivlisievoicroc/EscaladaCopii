@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { clearAuth, getStoredRole, getStoredToken } from '../utilis/auth';
 import { fetchAuditEvents } from '../utilis/audit';
 import { debugError } from '../utilis/debug';
-import LoginOverlay from './LoginOverlay';
 import controlPanelStyles from './ControlPanel.module.css';
 import styles from './AdminAuditView.module.css';
 
@@ -27,19 +25,13 @@ type AdminAuditViewProps = {
   className?: string;
   showBackLink?: boolean;
   showOpenFullPage?: boolean;
-  showLogout?: boolean;
 };
 
 const AdminAuditView: React.FC<AdminAuditViewProps> = ({
   className = '',
   showBackLink = false,
   showOpenFullPage = false,
-  showLogout = true,
 }) => {
-  const [token, setToken] = useState<string | null>(() => getStoredToken());
-  const [role, setRole] = useState<string | null>(() => getStoredRole());
-  const [showLogin, setShowLogin] = useState<boolean>(() => !(token && role === 'admin'));
-
   const [boxId, setBoxId] = useState<string>('');
   const [limit, setLimit] = useState<number>(200);
   const [includePayload, setIncludePayload] = useState<boolean>(false);
@@ -54,7 +46,6 @@ const AdminAuditView: React.FC<AdminAuditViewProps> = ({
   }, [boxId]);
 
   const refresh = async () => {
-    if (showLogin || role !== 'admin') return;
     setLoading(true);
     setError('');
     try {
@@ -66,7 +57,7 @@ const AdminAuditView: React.FC<AdminAuditViewProps> = ({
       setEvents(Array.isArray(data) ? data : []);
     } catch (err) {
       debugError('Failed to fetch audit events', err);
-      setError('Nu am putut încărca audit log-ul. Verifică API + autentificarea admin.');
+      setError('Nu am putut încărca audit log-ul. Verifică API + trusted admin network access.');
       setEvents([]);
     } finally {
       setLoading(false);
@@ -76,21 +67,10 @@ const AdminAuditView: React.FC<AdminAuditViewProps> = ({
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showLogin, role, effectiveBoxId, limit, includePayload]);
+  }, [effectiveBoxId, limit, includePayload]);
 
   return (
     <div className={className}>
-      {showLogin && (
-        <LoginOverlay
-          title="Autentificare admin"
-          onSuccess={() => {
-            setToken(getStoredToken());
-            setRole(getStoredRole());
-            setShowLogin(false);
-          }}
-        />
-      )}
-
       <div className={styles.header}>
         <div className={styles.titleBlock}>
           <div className={styles.title}>Audit</div>
@@ -104,20 +84,6 @@ const AdminAuditView: React.FC<AdminAuditViewProps> = ({
             >
               Open full page
             </Link>
-          )}
-          {showLogout && (
-            <button
-              className="modern-btn modern-btn-ghost modern-btn-sm"
-              type="button"
-              onClick={() => {
-                clearAuth();
-                setToken(null);
-                setRole(null);
-                setShowLogin(true);
-              }}
-            >
-              Logout
-            </button>
           )}
           {showBackLink && (
             <Link className="modern-btn modern-btn-primary modern-btn-sm" to="/">
@@ -162,7 +128,7 @@ const AdminAuditView: React.FC<AdminAuditViewProps> = ({
               className="modern-btn modern-btn-primary modern-btn-sm"
               type="button"
               onClick={refresh}
-              disabled={loading || showLogin || role !== 'admin'}
+              disabled={loading}
             >
               {loading ? 'Se încarcă…' : 'Refresh'}
             </button>

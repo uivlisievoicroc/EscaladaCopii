@@ -6,7 +6,7 @@ const AdminAuditPage: React.FC = () => {
   return (
     <div className={controlPanelStyles.container}>
       <section className={controlPanelStyles.adminBar}>
-        <AdminAuditView className="" showBackLink showLogout />
+        <AdminAuditView className="" showBackLink />
       </section>
     </div>
   );

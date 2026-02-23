@@ -54,17 +54,9 @@ import useWebSocketWithHeartbeat from '../utilis/useWebSocketWithHeartbeat';
 import { normalizeStorageValue } from '../utilis/normalizeStorageValue';
 import {
   clearAuth,
-  getStoredRole,
-  isAuthenticated,
   setJudgePassword as setJudgePasswordApi,
 } from '../utilis/auth';
 import { downloadOfficialResultsZip } from '../utilis/backup';
-import LoginOverlayImpl from './LoginOverlay';
-
-const LoginOverlay = LoginOverlayImpl as unknown as React.ComponentType<{
-  title: string;
-  onSuccess: () => void;
-}>;
 
 // Map `boxId -> Window` for any opened ContestPage tabs (used for focus/close and best-effort UI sync).
 const openTabs: { [boxId: number]: Window | null } = {};
@@ -357,14 +349,7 @@ const ControlPanel: FC = () => {
   const [prevRoundsRankInputs, setPrevRoundsRankInputs] = useState<Record<string, string>>({});
   const [loadingBoxes, setLoadingBoxes] = useState<LoadingBoxes>(new Set()); // TASK 3.1: Track loading operations
 
-  // -------------------- Admin auth + export selection --------------------
-  // Admin actions are gated by an httpOnly cookie token + stored role.
-  const [adminRole, setAdminRole] = useState<string | null>(() => getStoredRole());
-  const [showAdminLogin, setShowAdminLogin] = useState<boolean>(() => {
-    const authenticated = isAuthenticated();
-    const r = getStoredRole();
-    return !(authenticated && r === 'admin');
-  });
+  // -------------------- Admin export selection --------------------
   const [exportBoxId, setExportBoxId] = useState<number>(0);
 
   // -------------------- Refs to avoid stale closures in WS handlers --------------------
@@ -484,8 +469,6 @@ const ControlPanel: FC = () => {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           clearAuth();
-                setAdminRole(null);
-          setShowAdminLogin(true);
           throw new Error('auth_required');
         }
         const text = await res.text();
@@ -942,11 +925,7 @@ const ControlPanel: FC = () => {
       typeof msg.timeCriterionEnabled === 'boolean'
         ? msg.timeCriterionEnabled
         : getTimeCriterionEnabled(boxId);
-    const shouldPrompt =
-      criterionEnabled &&
-      hasEligibleTie &&
-      adminRole === 'admin' &&
-      isAuthenticated();
+    const shouldPrompt = criterionEnabled && hasEligibleTie;
     if (!shouldPrompt) {
       setTimeTiebreakPromptQueue((prev) => {
         const removed = prev.filter((prompt) => prompt.boxId === boxId);
@@ -1149,8 +1128,6 @@ const ControlPanel: FC = () => {
       const status = typeof (err as any)?.status === 'number' ? (err as any).status : null;
       if (status === 401 || status === 403) {
         clearAuth();
-        setAdminRole(null);
-        setShowAdminLogin(true);
       }
       setTimeTiebreakDecisionError('Failed to save decision. Please retry.');
     } finally {
@@ -1273,10 +1250,6 @@ const ControlPanel: FC = () => {
   // - server-driven flags like `timeCriterionEnabled`
   useEffect(() => {
     const config = getApiConfig();
-    // Check if authenticated (token in httpOnly cookie)
-    if (!isAuthenticated()) {
-      return;
-    }
     listboxes.forEach((_, idx) => {
       (async () => {
         try {
@@ -1285,8 +1258,6 @@ const ControlPanel: FC = () => {
           });
           if (res.status === 401) {
             clearAuth();
-                    setAdminRole(null);
-            setShowAdminLogin(true);
             return;
           }
           if (res.ok) {
@@ -1307,7 +1278,7 @@ const ControlPanel: FC = () => {
         }
       })();
     });
-  }, [listboxes, adminRole]);
+  }, [listboxes]);
 
   // Create/maintain per-box WebSocket connections and translate incoming messages into React state.
   // Dependencies: this effect re-runs when `listboxes` changes (box add/delete), and cleans up orphan sockets.
@@ -1700,11 +1671,6 @@ const ControlPanel: FC = () => {
         // Create WebSocket connection with heartbeat using a custom implementation
         // that manually manages the connection to fit our multi-box pattern
         const config = getApiConfig();
-        // Token is in httpOnly cookie - check if user appears authenticated
-        if (!isAuthenticated()) {
-          debugWarn(`Skipping WS connect for box ${idx}: not authenticated`);
-          return;
-        }
         // WebSocket will use cookie for auth (no token in URL for security)
         const url = `${config.WS_PROTOCOL_CP}://${window.location.hostname}:8000/api/ws/${idx}`;
         const { ws, disconnect } = connectControlPanelWs({
@@ -1928,8 +1894,6 @@ const ControlPanel: FC = () => {
       });
       if (res.status === 401 || res.status === 403) {
         clearAuth();
-        setAdminRole(null);
-        setShowAdminLogin(true);
       }
     } catch (err) {
       debugError(`[ControlPanel] TIMER_SYNC failed (box ${boxId})`, err);
@@ -2434,8 +2398,6 @@ const ControlPanel: FC = () => {
         });
         if (res.status === 401 || res.status === 403) {
           clearAuth();
-          setAdminRole(null);
-          setShowAdminLogin(true);
           return;
         }
 
@@ -2574,8 +2536,6 @@ const ControlPanel: FC = () => {
             });
             if (res.status === 401 || res.status === 403) {
               clearAuth();
-              setAdminRole(null);
-              setShowAdminLogin(true);
               return;
             }
             if (res.ok) {
@@ -2604,8 +2564,6 @@ const ControlPanel: FC = () => {
             });
             if (res.status === 401 || res.status === 403) {
               clearAuth();
-              setAdminRole(null);
-              setShowAdminLogin(true);
               return;
             }
             if (res.ok) {
@@ -2643,7 +2601,7 @@ const ControlPanel: FC = () => {
       setShowResetDialog(false);
     } catch (err) {
       debugError('RESET_PARTIAL failed:', err);
-      alert('Reset failed. Verify API is running and you are logged in as admin.');
+      alert('Reset failed. Verify API is running and this network is trusted for admin access.');
     } finally {
       setLoadingBoxes((prev) => {
         const next = new Set(prev);
@@ -2769,8 +2727,6 @@ const ControlPanel: FC = () => {
           });
           if (res.status === 401 || res.status === 403) {
             clearAuth();
-            setAdminRole(null);
-            setShowAdminLogin(true);
             return;
           }
           if (res.ok) {
@@ -2818,8 +2774,6 @@ const ControlPanel: FC = () => {
           });
           if (res.status === 401 || res.status === 403) {
             clearAuth();
-            setAdminRole(null);
-            setShowAdminLogin(true);
             return;
           }
           if (res.ok) {
@@ -2868,8 +2822,6 @@ const ControlPanel: FC = () => {
           });
           if (res.status === 401 || res.status === 403) {
             clearAuth();
-            setAdminRole(null);
-            setShowAdminLogin(true);
             return;
           }
           if (res.ok) {
@@ -2923,8 +2875,6 @@ const ControlPanel: FC = () => {
           });
           if (res.status === 401 || res.status === 403) {
             clearAuth();
-            setAdminRole(null);
-            setShowAdminLogin(true);
             return;
           }
           if (res.ok) {
@@ -2977,8 +2927,6 @@ const ControlPanel: FC = () => {
           });
           if (res.status === 401 || res.status === 403) {
             clearAuth();
-            setAdminRole(null);
-            setShowAdminLogin(true);
             return;
           }
           if (res.ok) {
@@ -3076,8 +3024,6 @@ const ControlPanel: FC = () => {
         });
         if (res.status === 401 || res.status === 403) {
           clearAuth();
-          setAdminRole(null);
-          setShowAdminLogin(true);
           return false;
         }
         if (res.ok) {
@@ -3133,8 +3079,6 @@ const ControlPanel: FC = () => {
           });
           if (res.status === 401 || res.status === 403) {
             clearAuth();
-            setAdminRole(null);
-            setShowAdminLogin(true);
             return false;
           }
           if (res.ok) {
@@ -3404,11 +3348,6 @@ const ControlPanel: FC = () => {
     const box = listboxes[boxIdx];
     if (!box) return;
     setJudgePasswordBoxId(boxIdx);
-    if (showAdminLogin || adminRole !== 'admin') {
-      setShowAdminLogin(true);
-      alert('You must be logged in as admin to set the judge password.');
-      return;
-    }
     setJudgeUsername((box.categorie || `Box ${boxIdx}`).trim());
     setJudgePassword('');
     setJudgePasswordConfirm('');
@@ -3513,7 +3452,7 @@ const ControlPanel: FC = () => {
         safeSetItem('competitionChiefRoutesetter', chiefRoutesetter);
       } catch (err) {
         debugError('Failed to save competition officials', err);
-        alert('Failed to save competition officials. Check admin login/API.');
+        alert('Failed to save competition officials. Check API and trusted admin network access.');
       }
     }
 
@@ -3521,14 +3460,6 @@ const ControlPanel: FC = () => {
   };
 
   const submitJudgePassword = async (boxIdx: number): Promise<void> => {
-    if (showAdminLogin || adminRole !== 'admin') {
-      setShowAdminLogin(true);
-      setJudgePasswordStatus({
-        type: 'error',
-        message: 'You must be logged in as admin to set the judge password.',
-      });
-      return;
-    }
     const username = judgeUsername.trim();
     if (!username) {
       setJudgePasswordStatus({ type: 'error', message: 'Username is required.' });
@@ -3559,17 +3490,15 @@ const ControlPanel: FC = () => {
       debugError('Failed to set judge password', err);
       if (err instanceof Error && err.message === 'auth_required') {
         clearAuth();
-        setAdminRole(null);
-        setShowAdminLogin(true);
         setJudgePasswordStatus({
           type: 'error',
-          message: 'You are not authenticated as admin. Please log in again.',
+          message: 'Admin access denied for this network. Check trusted IP configuration.',
         });
         return;
       }
       setJudgePasswordStatus({
         type: 'error',
-        message: 'Unable to set password. Please verify you are logged in as admin.',
+        message: 'Unable to set password. Verify API and trusted admin network access.',
       });
     }
   };
@@ -3709,7 +3638,7 @@ const ControlPanel: FC = () => {
       await setTimerPreset(timerDialogBoxId, normalized);
     } catch (err) {
       debugError('SET_TIMER_PRESET failed', err);
-      setTimerDialogError('Failed to sync timer preset to server. Check API/login.');
+      setTimerDialogError('Failed to sync timer preset to server. Check API and trusted admin access.');
       return;
     }
     const currentCriterion = getTimeCriterionEnabled(timerDialogBoxId);
@@ -3721,26 +3650,14 @@ const ControlPanel: FC = () => {
 
   // Admin export: download the official results archive (ZIP).
   const handleExportOfficial = async () => {
-    if (showAdminLogin || adminRole !== 'admin') {
-      setShowAdminLogin(true);
-      alert('You must be logged in as admin for official export.');
-      return;
-    }
     try {
       await downloadOfficialResultsZip(exportBoxId);
     } catch (err) {
       debugError('Failed to export official results ZIP', err);
       alert(
-        'Official export failed: verify the API is running and you are logged in as admin.',
+        'Official export failed: verify the API is running and this network is trusted for admin.',
       );
     }
-  };
-
-  // Clear admin auth and show login overlay again.
-  const handleAdminLogout = () => {
-    clearAuth();
-    setAdminRole(null);
-    setShowAdminLogin(true);
   };
 
 
@@ -3783,11 +3700,6 @@ const ControlPanel: FC = () => {
       setJudgeAccessBoxId(0);
     }
   }, [listboxes.length, judgeAccessBoxId]);
-
-  // Read stored role once on mount (role also updates after login).
-  useEffect(() => {
-    setAdminRole(getStoredRole());
-  }, []);
 
   // -------------------- Derived UI flags --------------------
   const initiatedBoxIds = listboxes.reduce((acc, lb, idx) => {
@@ -3861,16 +3773,6 @@ const ControlPanel: FC = () => {
   ];
   return (
     <div className={styles.container}>
-      {/* Admin auth overlay (blocks admin-only actions when not logged in). */}
-      {showAdminLogin && (
-        <LoginOverlay
-          title="Admin Authentication"
-          onSuccess={() => {
-            setAdminRole(getStoredRole());
-            setShowAdminLogin(false);
-          }}
-        />
-      )}
       {/* Page header (ControlPanel branding + short description). */}
       <div className={styles.header}>
         <h1 className={styles.title}>🎯 Control Panel</h1>
@@ -3882,19 +3784,6 @@ const ControlPanel: FC = () => {
           <div>
             <h2 className="text-2xl font-semibold text-primary">Admin Panel</h2>
             <p className="text-sm text-secondary">Admin Panel › {adminViewLabel}</p>
-          </div>
-          <div className="flex items-center gap-md">
-            {adminRole === 'admin' ? (
-              <button
-                className="modern-btn modern-btn-ghost"
-                onClick={handleAdminLogout}
-                type="button"
-              >
-                Log out
-              </button>
-            ) : (
-              <span className="modern-badge modern-badge-neutral">Login required</span>
-            )}
           </div>
         </div>
 
@@ -3909,7 +3798,6 @@ const ControlPanel: FC = () => {
                     className="mt-1 w-full border border-slate-300 rounded px-2 py-1"
                     value={adminActionsView}
                     onChange={(e) => setAdminActionsView(e.target.value as AdminActionsView)}
-                    disabled={adminRole !== 'admin'}
                   >
                     {adminSections.map(({ id, label }) => (
                       <option key={id} value={id}>
@@ -3935,7 +3823,6 @@ const ControlPanel: FC = () => {
                             : 'text-slate-300 hover:bg-white/5 border border-transparent'
                         }`}
                         onClick={() => setAdminActionsView(id)}
-                        disabled={adminRole !== 'admin'}
                         type="button"
                       >
                         <Icon className={isActive ? 'text-cyan-400' : 'text-slate-400'} />
@@ -3948,77 +3835,70 @@ const ControlPanel: FC = () => {
             </div>
 
             <div className="p-6">
-              {adminRole !== 'admin' ? (
-                <div className="text-sm text-slate-500">Admin login required.</div>
-              ) : (
-                <>
-                  {adminActionsView === 'actions' && (
-                    <ControlPanelActionsSection
-                      styles={styles as unknown as Record<string, string>}
-                      listboxes={listboxes}
-                      initiatedBoxIds={initiatedBoxIds}
-                      scoringEnabled={scoringEnabled}
-                      scoringBoxId={scoringBoxId}
-                      setScoringBoxId={setScoringBoxId}
-                      scoringBoxSelected={scoringBoxSelected}
-                      scoringBoxHasMarked={scoringBoxHasMarked}
-                      showTieBreaksEnabled={showTieBreaksEnabled}
-                      openModifyScoreFromAdmin={openModifyScoreFromAdmin}
-                      openCeremonyFromAdmin={openCeremonyFromAdmin}
-                      openShowTieBreaksDialog={openShowTieBreaksDialog}
-                      judgeAccessEnabled={judgeAccessEnabled}
-                      judgeAccessBoxId={judgeAccessBoxId}
-                      setJudgeAccessBoxId={setJudgeAccessBoxId}
-                      judgeAccessSelected={judgeAccessSelected}
-                      judgeAccessBox={judgeAccessBox}
-                      openSetJudgePasswordDialog={openSetJudgePasswordDialog}
-                      openQrDialog={openQrDialog}
-                      openJudgeViewFromAdmin={openJudgeViewFromAdmin}
-                      setupBoxId={setupBoxId}
-                      setSetupBoxId={setSetupBoxId}
-                      openBoxTimerDialog={openBoxTimerDialog}
-                      openRoutesetterDialog={openRoutesetterDialog}
-                    />
-                  )}
+              {adminActionsView === 'actions' && (
+                <ControlPanelActionsSection
+                  styles={styles as unknown as Record<string, string>}
+                  listboxes={listboxes}
+                  initiatedBoxIds={initiatedBoxIds}
+                  scoringEnabled={scoringEnabled}
+                  scoringBoxId={scoringBoxId}
+                  setScoringBoxId={setScoringBoxId}
+                  scoringBoxSelected={scoringBoxSelected}
+                  scoringBoxHasMarked={scoringBoxHasMarked}
+                  showTieBreaksEnabled={showTieBreaksEnabled}
+                  openModifyScoreFromAdmin={openModifyScoreFromAdmin}
+                  openCeremonyFromAdmin={openCeremonyFromAdmin}
+                  openShowTieBreaksDialog={openShowTieBreaksDialog}
+                  judgeAccessEnabled={judgeAccessEnabled}
+                  judgeAccessBoxId={judgeAccessBoxId}
+                  setJudgeAccessBoxId={setJudgeAccessBoxId}
+                  judgeAccessSelected={judgeAccessSelected}
+                  judgeAccessBox={judgeAccessBox}
+                  openSetJudgePasswordDialog={openSetJudgePasswordDialog}
+                  openQrDialog={openQrDialog}
+                  openJudgeViewFromAdmin={openJudgeViewFromAdmin}
+                  setupBoxId={setupBoxId}
+                  setSetupBoxId={setSetupBoxId}
+                  openBoxTimerDialog={openBoxTimerDialog}
+                  openRoutesetterDialog={openRoutesetterDialog}
+                />
+              )}
 
-                  {adminActionsView === 'public' && (
-                    <ControlPanelPublicSection
-                      styles={styles as unknown as Record<string, string>}
-                      openPublicQrDialog={openPublicQrDialog}
-                      openPublicRankings={() => {
-                        window.open(`${window.location.origin}/#/rankings`, '_blank');
-                      }}
-                    />
-                  )}
+              {adminActionsView === 'public' && (
+                <ControlPanelPublicSection
+                  styles={styles as unknown as Record<string, string>}
+                  openPublicQrDialog={openPublicQrDialog}
+                  openPublicRankings={() => {
+                    window.open(`${window.location.origin}/#/rankings`, '_blank');
+                  }}
+                />
+              )}
 
-                  {adminActionsView === 'upload' && (
-                    <ControlPanelUploadSection
-                      isOpen={adminActionsView === 'upload'}
-                      onClose={() => setAdminActionsView('actions')}
-                      onUpload={handleUpload}
-                    />
-                  )}
+              {adminActionsView === 'upload' && (
+                <ControlPanelUploadSection
+                  isOpen={adminActionsView === 'upload'}
+                  onClose={() => setAdminActionsView('actions')}
+                  onUpload={handleUpload}
+                />
+              )}
 
-                  {adminActionsView === 'export' && (
-                    <ControlPanelExportSection
-                      listboxes={listboxes}
-                      exportBoxId={exportBoxId}
-                      onChangeExportBoxId={setExportBoxId}
-                      onExport={handleExportOfficial}
-                    />
-                  )}
+              {adminActionsView === 'export' && (
+                <ControlPanelExportSection
+                  listboxes={listboxes}
+                  exportBoxId={exportBoxId}
+                  onChangeExportBoxId={setExportBoxId}
+                  onExport={handleExportOfficial}
+                />
+              )}
 
-                  {adminActionsView === 'audit' && (
-                    <div className="h-full">
-                      <AdminAuditView
-                        className=""
-                        showOpenFullPage
-                        showBackLink={false}
-                        showLogout={false}
-                      />
-                    </div>
-                  )}
-                </>
+              {adminActionsView === 'audit' && (
+                <div className="h-full">
+                  <AdminAuditView
+                    className=""
+                    showOpenFullPage
+                    showBackLink={false}
+                  />
+                </div>
               )}
             </div>
           </div>
@@ -5093,8 +4973,6 @@ const ControlPanel: FC = () => {
                         });
                         if (res.status === 401 || res.status === 403) {
                           clearAuth();
-                          setAdminRole(null);
-                          setShowAdminLogin(true);
                           return;
                         }
                         if (!res.ok) {
