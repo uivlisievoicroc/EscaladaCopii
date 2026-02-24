@@ -1,5 +1,9 @@
 import { fetchWithRetry } from './fetch';
 import { safeGetItem, safeSetItem, safeRemoveItem } from './storage';
+import {
+  getAdminSecurityHeaders,
+  handleAdminSecurityErrorResponse,
+} from './adminSecurityService';
 
 const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
 const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000`;
@@ -136,13 +140,17 @@ export async function generateMagicToken(boxId) {
     `${API_BASE}/api/admin/auth/boxes/${boxId}/magic-token`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAdminSecurityHeaders({ 'Content-Type': 'application/json' }),
       credentials: 'include',
     },
     1,
     5000,
   );
   if (!res.ok) {
+    const handledSecurityLock = await handleAdminSecurityErrorResponse(res);
+    if (handledSecurityLock) {
+      throw new Error('security_locked');
+    }
     const errTxt = await res.text();
     throw new Error(errTxt || 'Generate magic token failed');
   }
@@ -154,7 +162,7 @@ export async function setJudgePassword(boxId, password, username) {
     `${API_BASE}/api/admin/auth/boxes/${boxId}/password`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAdminSecurityHeaders({ 'Content-Type': 'application/json' }),
       credentials: 'include',
       body: JSON.stringify({ password, username }),
     },
@@ -162,6 +170,10 @@ export async function setJudgePassword(boxId, password, username) {
     5000,
   );
   if (!res.ok) {
+    const handledSecurityLock = await handleAdminSecurityErrorResponse(res);
+    if (handledSecurityLock) {
+      throw new Error('security_locked');
+    }
     if (res.status === 401 || res.status === 403) {
       await clearAuth();
       throw new Error('auth_required');

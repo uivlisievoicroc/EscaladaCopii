@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { debugLog, debugError } from '../utilis/debug';
 import { clearAuth } from '../utilis/auth';
+import {
+  getAdminSecurityHeaders,
+  handleAdminSecurityErrorResponse,
+} from '../utilis/adminSecurityService';
 import styles from './ControlPanel.module.css';
 
 // Admin-only route (cookie-authenticated) is served under `/api/admin`.
@@ -8,7 +12,7 @@ import styles from './ControlPanel.module.css';
 const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
 const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/admin`;
 
-const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
+const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false, disabled = false }) => {
   // Form state: category label, Excel file, number of routes and per-route holds count.
   const [category, setCategory] = useState('');
   const [file, setFile] = useState(null);
@@ -17,6 +21,10 @@ const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (disabled) {
+      alert('Admin actions are locked. Connect USB key and press Unlock.');
+      return;
+    }
 
     const holdsCountsNum = holdsCounts.map((h) => {
       const parsed = typeof h === 'string' ? Number(h) : Number(h);
@@ -52,10 +60,16 @@ const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
       const res = await fetch(`${API_BASE}/upload`, {
         method: 'POST',
         credentials: 'include',
+        headers: getAdminSecurityHeaders(),
         body: formData,
       });
 
       if (!res.ok) {
+        const handledSecurityLock = await handleAdminSecurityErrorResponse(res);
+        if (handledSecurityLock) {
+          alert('Admin actions are locked. Connect USB key and press Unlock.');
+          return;
+        }
         // Auth failures typically mean the admin cookie expired or was cleared.
         if (res.status === 401 || res.status === 403) {
           clearAuth();
@@ -108,6 +122,7 @@ const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
           value={category}
           onChange={(e) => setCategory(e.target.value)}
           className={styles.modalInput}
+          disabled={disabled}
           required
         />
       </div>
@@ -128,6 +143,7 @@ const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
             setHoldsCounts(Array(Number(val)).fill(''));
           }}
           className={styles.modalInput}
+          disabled={disabled}
           required
         />
       </div>
@@ -150,6 +166,7 @@ const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
                 setHoldsCounts(newCounts);
               }}
               className={styles.modalInput}
+              disabled={disabled}
               required
             />
           </div>
@@ -163,6 +180,7 @@ const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
           onChange={(e) => setFile(e.target.files[0])}
           className={styles.modalInput}
           style={{ padding: '8px 12px' }}
+          disabled={disabled}
           required
         />
       </div>
@@ -173,6 +191,7 @@ const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
             type="button"
             onClick={onClose}
             className="modern-btn modern-btn-ghost"
+            disabled={disabled}
           >
             Cancel
           </button>
@@ -180,6 +199,7 @@ const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false }) => {
         <button
           type="submit"
           className="modern-btn modern-btn-primary"
+          disabled={disabled}
         >
           Upload
         </button>

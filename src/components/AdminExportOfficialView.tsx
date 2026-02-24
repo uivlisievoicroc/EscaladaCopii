@@ -32,6 +32,7 @@ import styles from './AdminExportOfficialView.module.css';
  * - Export button enabled only after box selection
  */
 type AdminExportOfficialViewProps = {
+  disabled?: boolean;
   listboxes: Box[];
   exportBoxId: number;
   onChangeExportBoxId: (boxId: number) => void;
@@ -39,6 +40,7 @@ type AdminExportOfficialViewProps = {
 };
 
 const AdminExportOfficialView: React.FC<AdminExportOfficialViewProps> = ({
+  disabled = false,
   listboxes,
   exportBoxId,
   onChangeExportBoxId,
@@ -61,7 +63,7 @@ const AdminExportOfficialView: React.FC<AdminExportOfficialViewProps> = ({
               className={controlPanelStyles.modalSelect}
               value={exportBoxId}
               onChange={(e) => onChangeExportBoxId(Number(e.target.value))}
-              disabled={!hasBoxes}
+              disabled={disabled || !hasBoxes}
             >
               {hasBoxes ? (
                 listboxes.map((b, idx) => (
@@ -91,7 +93,7 @@ const AdminExportOfficialView: React.FC<AdminExportOfficialViewProps> = ({
             <button
               className="modern-btn modern-btn-primary"
               onClick={onExport}
-              disabled={!hasBoxes}
+              disabled={disabled || !hasBoxes}
               type="button"
             >
               Export official (ZIP)

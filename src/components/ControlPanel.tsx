@@ -20,6 +20,7 @@ import type {
   TimeTiebreakEligibleGroup,
 } from '../types';
 import AdminAuditView from './AdminAuditView';
+import SecurityControls from './SecurityControls';
 import ControlPanelActionsSection from './control-panel/ControlPanelActionsSection';
 import ControlPanelPublicSection from './control-panel/ControlPanelPublicSection';
 import ControlPanelUploadSection from './control-panel/ControlPanelUploadSection';
@@ -56,6 +57,11 @@ import {
   clearAuth,
   setJudgePassword as setJudgePasswordApi,
 } from '../utilis/auth';
+import {
+  getAdminSecurityHeaders,
+  handleAdminSecurityErrorResponse,
+} from '../utilis/adminSecurityService';
+import { useAdminSecurity } from '../utilis/useAdminSecurity';
 import { downloadOfficialResultsZip } from '../utilis/backup';
 
 // Map `boxId -> Window` for any opened ContestPage tabs (used for focus/close and best-effort UI sync).
@@ -391,12 +397,36 @@ const ControlPanel: FC = () => {
     });
   }, [listboxes]);
 
-  // Auto-select first category in Setup dropdown when boxes are loaded
+  // Keep Setup selection + Setup modals consistent with listboxes.
   useEffect(() => {
-    if (listboxes.length > 0 && setupBoxId == null) {
+    if (listboxes.length === 0) {
+      setSetupBoxId(null);
+      setTimeCriterionByBox({});
+      safeRemoveItem('timeCriterionEnabled');
+
+      // Reset Setup modals back to their initial state (matches a page reload).
+      setShowBoxTimerDialog(false);
+      setTimerDialogBoxId(null);
+      setTimerDialogValue('');
+      setTimerDialogCriterion(false);
+      setTimerDialogError(null);
+
+      setShowRoutesetterDialog(false);
+      setRoutesetterBoxId(null);
+      setRoutesetterRouteIndex(1);
+      setRoutesetterNameInput('');
+      setRoutesetterNamesTemp({});
+      setRoutesetterDialogError(null);
+      setJudgeChiefInput('');
+      setCompetitionDirectorInput('');
+      setChiefRoutesetterInput('');
+      return;
+    }
+
+    if (setupBoxId == null || setupBoxId < 0 || setupBoxId >= listboxes.length) {
       setSetupBoxId(0);
     }
-  }, [listboxes, setupBoxId]);
+  }, [listboxes.length, setupBoxId]);
 
   // -------------------- WebSocket subscriptions (per box) --------------------
   // Each box gets an authenticated WS connection (`/api/ws/{boxId}`) that:
@@ -456,7 +486,7 @@ const ControlPanel: FC = () => {
       const config = getApiConfig();
       const res = await fetch(config.API_CP, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminSecurityHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'include',
         body: JSON.stringify({
           boxId,
@@ -467,6 +497,10 @@ const ControlPanel: FC = () => {
         }),
       });
       if (!res.ok) {
+        const handledSecurityLock = await handleAdminSecurityErrorResponse(res);
+        if (handledSecurityLock) {
+          throw new Error('admin_security_locked');
+        }
         if (res.status === 401 || res.status === 403) {
           clearAuth();
           throw new Error('auth_required');
@@ -1126,7 +1160,7 @@ const ControlPanel: FC = () => {
     } catch (err) {
       debugError('Failed to persist previous-rounds tiebreak decision', err);
       const status = typeof (err as any)?.status === 'number' ? (err as any).status : null;
-      if (status === 401 || status === 403) {
+      if ((status === 401 || status === 403) && !isAdminSecurityError(err)) {
         clearAuth();
       }
       setTimeTiebreakDecisionError('Failed to save decision. Please retry.');
@@ -1882,7 +1916,7 @@ const ControlPanel: FC = () => {
     try {
       const res = await fetch(config.API_CP, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminSecurityHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'include',
         body: JSON.stringify({
           boxId,
@@ -1893,7 +1927,10 @@ const ControlPanel: FC = () => {
         }),
       });
       if (res.status === 401 || res.status === 403) {
-        clearAuth();
+        const handledSecurityLock = await handleAdminSecurityErrorResponse(res);
+        if (!handledSecurityLock) {
+          clearAuth();
+        }
       }
     } catch (err) {
       debugError(`[ControlPanel] TIMER_SYNC failed (box ${boxId})`, err);
@@ -2093,7 +2130,8 @@ const ControlPanel: FC = () => {
       const config = getApiConfig();
       fetch(config.API_CP, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminSecurityHeaders({ 'Content-Type': 'application/json' }),
+        credentials: 'include',
         body: JSON.stringify({
           boxId: idx,
           type: 'ACTIVE_CLIMBER',
@@ -2169,6 +2207,7 @@ const ControlPanel: FC = () => {
     routesCount?: number | string;
     holdsCounts?: Array<number | string>;
   }) => {
+    if (!ensureAdminActionsUnlocked()) return;
     // Add a new box definition locally (backend state is created on initiate/initRoute).
     const { categorie, concurenti, routesCount, holdsCounts } = data;
     const routesCountNum = Number(routesCount) || (Array.isArray(holdsCounts) ? holdsCounts.length : 0);
@@ -2213,6 +2252,25 @@ const ControlPanel: FC = () => {
       await resetBox(index);
     } catch (err) {
       debugError(`RESET_BOX failed for box ${index}`, err);
+    }
+
+    // Clear per-box persisted keys for the deleted box so future uploads don't inherit stale settings.
+    const boxToDelete = listboxesRef.current[index] || listboxes[index];
+    const routesCountToDelete = Math.max(1, Number(boxToDelete?.routesCount) || 1);
+    [
+      `timer-${index}`,
+      `timer-sync-${index}`,
+      `registeredTime-${index}`,
+      `climbingTime-${index}`,
+      `timeCriterionEnabled-${index}`,
+      `tick-owner-${index}`,
+      `ranking-${index}`,
+      `rankingTimes-${index}`,
+      `podium-${index}`,
+      `routesetterName-${index}`,
+    ].forEach((key) => safeRemoveItem(key));
+    for (let routeIdx = 1; routeIdx <= routesCountToDelete; routeIdx += 1) {
+      safeRemoveItem(`routesetterName-${index}-${routeIdx}`);
     }
     // ==================== FIX 2: EXPLICIT WS CLOSE ====================
     // Close WebSocket BEFORE deleting from state to prevent ghost WS
@@ -2368,6 +2426,7 @@ const ControlPanel: FC = () => {
 
   // Open the reset dialog (all options start unchecked so the user explicitly selects what to reset).
   const openResetDialog = (index: number): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     setResetDialogBoxId(index);
     setResetDialogOpts({ resetTimer: false, clearProgress: false, closeTab: false, unmarkAll: false });
     setShowResetDialog(true);
@@ -2375,6 +2434,7 @@ const ControlPanel: FC = () => {
 
   // Apply the reset options: optimistic UI updates + backend reset (partial) with a resync-and-retry on stale_version.
   const applyResetDialog = async (): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (resetDialogBoxId == null) return;
     const boxIdx = resetDialogBoxId;
     const opts = resetDialogOpts;
@@ -2626,6 +2686,7 @@ const ControlPanel: FC = () => {
 
 	  // Initiate a contest box for the current route (without automatically opening ContestPage).
 	  const handleInitiate = (index: number): void => {
+    if (!ensureAdminActionsUnlocked()) return;
 	    // 1) Optimistic local state: mark box initiated and reset per-climb UI state.
 	    setListboxes((prev) => prev.map((lb, i) => (i === index ? { ...lb, initiated: true } : lb)));
 	    setTimerStates((prev) => ({ ...prev, [index]: 'idle' }));
@@ -2657,12 +2718,14 @@ const ControlPanel: FC = () => {
   };
 
   const handleDeleteWithConfirm = async (index: number): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (!confirmDeleteBox(index)) return;
     await handleDelete(index);
   };
 
 	  // Advance to the next route on demand
 	  const handleNextRoute = (index: number): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     // NEW: Bounds check for box index
     if (index < 0 || index >= listboxes.length) {
       debugError(`Invalid box index: ${index}`);
@@ -2713,6 +2776,7 @@ const ControlPanel: FC = () => {
   // We update the UI immediately, then send the command to the backend.
   // If the backend responds with `ignored` (usually `stale_version`), we resync `/api/state/{boxId}` and retry once.
   const handleClickStart = async (boxIdx: number): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     setLoadingBoxes((prev) => new Set(prev).add(boxIdx)); // TASK 3.1: Set loading
     setTimerStates((prev) => ({ ...prev, [boxIdx]: 'running' }));
     clearRegisteredTime(boxIdx);
@@ -2761,6 +2825,7 @@ const ControlPanel: FC = () => {
   };
 
   const handleClickStop = async (boxIdx: number): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     setLoadingBoxes((prev) => new Set(prev).add(boxIdx)); // TASK 3.1: Set loading
     setTimerStates((prev) => ({ ...prev, [boxIdx]: 'paused' }));
     try {
@@ -2808,6 +2873,7 @@ const ControlPanel: FC = () => {
   };
 
   const handleClickResume = async (boxIdx: number): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     setLoadingBoxes((prev) => new Set(prev).add(boxIdx)); // TASK 3.1: Set loading
     setTimerStates((prev) => ({ ...prev, [boxIdx]: 'running' }));
     clearRegisteredTime(boxIdx);
@@ -2858,6 +2924,7 @@ const ControlPanel: FC = () => {
   // -------------------- Progress controls (+1 / +0.1 holds) --------------------
   // Clamp to `holdsCount` and retry once on backend `ignored` responses.
   const handleClickHold = async (boxIdx: number): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     setLoadingBoxes((prev) => new Set(prev).add(boxIdx)); // TASK 3.1: Set loading
     try {
       const box = listboxesRef.current[boxIdx] || listboxes[boxIdx];
@@ -2910,6 +2977,7 @@ const ControlPanel: FC = () => {
 
   // Half-hold action (+0.1) used for routes with fractional scoring.
   const handleHalfHoldClick = async (boxIdx: number): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     setLoadingBoxes((prev) => new Set(prev).add(boxIdx)); // TASK 3.1: Set loading
     try {
       const box = listboxesRef.current[boxIdx] || listboxes[boxIdx];
@@ -3013,6 +3081,7 @@ const ControlPanel: FC = () => {
     score: number,
     boxIdx: number,
   ): Promise<boolean | void> => {
+    if (!ensureAdminActionsUnlocked()) return false;
     setLoadingBoxes((prev) => new Set(prev).add(boxIdx)); // TASK 3.1: Set loading
     // Ensure we always submit against an actual competitor name (headless-safe).
     let competitorName = activeCompetitor || currentClimbersRef.current[boxIdx] || '';
@@ -3172,6 +3241,7 @@ const ControlPanel: FC = () => {
 
   // Ask the backend to generate rankings for this box using the locally cached per-route scores (and optional times).
   const handleGenerateRankings = async (boxIdx: number): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     const box = listboxesRef.current[boxIdx] || listboxes[boxIdx];
     if (!box) return;
     const ranking = safeGetJSON(`ranking-${boxIdx}`, {});
@@ -3185,7 +3255,8 @@ const ControlPanel: FC = () => {
       const config = getApiConfig();
       const res = await fetch(`${config.API_CP.replace('/cmd', '')}/save_ranking`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: getAdminSecurityHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           categorie: box.categorie,
           route_count: box.routesCount,
@@ -3213,7 +3284,10 @@ const ControlPanel: FC = () => {
           prev_rounds_tiebreak_lineage_ranks_by_key: tiebreakState?.prevLineageRanks ?? {},
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        await handleAdminSecurityErrorResponse(res);
+        throw new Error(`HTTP ${res.status}`);
+      }
       showRankingStatus(boxIdx, 'Rankings generated');
     } catch (err) {
       debugError('Failed to generate rankings:', err);
@@ -3329,6 +3403,7 @@ const ControlPanel: FC = () => {
 
   // Open the Judge QR modal for a given box (URL includes boxId + category).
   const openQrDialog = (boxIdx: number): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     const box = listboxes[boxIdx];
     if (!box) return;
     const url = buildJudgeUrl(boxIdx, box.categorie);
@@ -3338,6 +3413,7 @@ const ControlPanel: FC = () => {
 
   // Open the Public QR modal (public hub entry point).
   const openPublicQrDialog = (): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     const url = buildPublicHubUrl();
     setPublicQrUrl(url);
     setShowPublicQrDialog(true);
@@ -3345,6 +3421,7 @@ const ControlPanel: FC = () => {
 
   // Open the "Set judge password" modal for a given box (admin only).
   const openSetJudgePasswordDialog = (boxIdx: number): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     const box = listboxes[boxIdx];
     if (!box) return;
     setJudgePasswordBoxId(boxIdx);
@@ -3359,6 +3436,7 @@ const ControlPanel: FC = () => {
   // - per-route routesetter names (per box)
   // - global officials (chief judge / director / chief routesetter)
   const openRoutesetterDialog = (boxId: number | null): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (boxId == null || listboxes.length === 0) return;
     const box = listboxes[boxId];
     const routeIdx = box?.routeIndex || 1;
@@ -3406,6 +3484,7 @@ const ControlPanel: FC = () => {
   // - Routesetters are stored locally per route
   // - Global officials are synced to backend (best-effort)
   const saveRoutesetter = async (): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (routesetterBoxId == null) {
       setRoutesetterDialogError('Select a category.');
       return;
@@ -3460,6 +3539,7 @@ const ControlPanel: FC = () => {
   };
 
   const submitJudgePassword = async (boxIdx: number): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     const username = judgeUsername.trim();
     if (!username) {
       setJudgePasswordStatus({ type: 'error', message: 'Username is required.' });
@@ -3488,6 +3568,13 @@ const ControlPanel: FC = () => {
       setJudgePasswordConfirm('');
     } catch (err: unknown) {
       debugError('Failed to set judge password', err);
+      if (err instanceof Error && err.message === 'security_locked') {
+        setJudgePasswordStatus({
+          type: 'error',
+          message: 'Admin actions are locked. Connect USB key and press Unlock.',
+        });
+        return;
+      }
       if (err instanceof Error && err.message === 'auth_required') {
         clearAuth();
         setJudgePasswordStatus({
@@ -3506,6 +3593,7 @@ const ControlPanel: FC = () => {
 
   // Admin action: open the "Modify score" modal for the selected scoring box.
   const openModifyScoreFromAdmin = (): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (scoringBoxId == null) return;
     const { comp, scores, times } = buildEditLists(scoringBoxId);
     setEditList(comp);
@@ -3516,6 +3604,7 @@ const ControlPanel: FC = () => {
 
   // Admin action: open JudgePage for the selected box (new tab).
   const openJudgeViewFromAdmin = (): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (judgeAccessBoxId == null) return;
     const box = listboxes[judgeAccessBoxId];
     if (!box) return;
@@ -3525,6 +3614,7 @@ const ControlPanel: FC = () => {
   // Admin action: open Award Ceremony for the selected box/category.
   // Gated by `isContestFinalized()` so we don't show winners before results are complete.
   const openCeremonyFromAdmin = (): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (scoringBoxId == null) return;
     const box = listboxes[scoringBoxId];
     if (!box) return;
@@ -3546,6 +3636,7 @@ const ControlPanel: FC = () => {
   };
 
   const openShowTieBreaksDialog = (): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (scoringBoxId == null) return;
     setShowTieBreaksDialog(true);
   };
@@ -3591,6 +3682,7 @@ const ControlPanel: FC = () => {
 
   // Open the per-box timer preset modal (prefilled from current box + localStorage).
   const openBoxTimerDialog = (boxId: number | null): void => {
+    if (!ensureAdminActionsUnlocked()) return;
     const resolved =
       typeof boxId === 'number'
         ? boxId
@@ -3624,6 +3716,7 @@ const ControlPanel: FC = () => {
 
   // Persist the timer preset to backend and propagate time-criterion changes if toggled.
   const saveBoxTimerDialog = async (): Promise<void> => {
+    if (!ensureAdminActionsUnlocked()) return;
     if (timerDialogBoxId == null) {
       setTimerDialogError('Select a box.');
       return;
@@ -3650,6 +3743,7 @@ const ControlPanel: FC = () => {
 
   // Admin export: download the official results archive (ZIP).
   const handleExportOfficial = async () => {
+    if (!ensureAdminActionsUnlocked()) return;
     try {
       await downloadOfficialResultsZip(exportBoxId);
     } catch (err) {
@@ -3759,6 +3853,22 @@ const ControlPanel: FC = () => {
     judgeAccessBoxId != null ? listboxes[judgeAccessBoxId] : null;
   const judgeAccessSelected = judgeAccessBoxId != null && !!judgeAccessBox;
   const judgeAccessEnabled = listboxes.length > 0;
+  const { adminUnlocked, licenseValid, licenseReason } = useAdminSecurity();
+  const adminActionsLocked = !adminUnlocked || !licenseValid;
+  const adminLockedBanner =
+    'Acțiunile de administrator sunt blocate. Conectează cheia USB și apasă Unlock.';
+  const isAdminSecurityError = (error: unknown): boolean => {
+    const errorCode =
+      error && typeof error === 'object' && 'code' in error
+        ? (error as { code?: unknown }).code
+        : null;
+    return errorCode === 'LICENSE_REQUIRED' || errorCode === 'ADMIN_SESSION_REQUIRED';
+  };
+  const ensureAdminActionsUnlocked = (): boolean => {
+    if (!adminActionsLocked) return true;
+    alert(adminLockedBanner);
+    return false;
+  };
   const adminViewLabel = ADMIN_VIEW_LABELS[adminActionsView];
   const adminSections: {
     id: AdminActionsView;
@@ -3785,9 +3895,15 @@ const ControlPanel: FC = () => {
             <h2 className="text-2xl font-semibold text-primary">Admin Panel</h2>
             <p className="text-sm text-secondary">Admin Panel › {adminViewLabel}</p>
           </div>
+          <SecurityControls />
         </div>
 
-          
+        {adminActionsLocked && (
+          <div className={styles.modalAlert} style={{ marginBottom: '12px' }}>
+            {adminLockedBanner}
+            {licenseReason ? ` (${licenseReason})` : ''}
+          </div>
+        )}
 
           <div className="md:grid md:grid-cols-[220px_1fr]">
             <div className="border-b border-slate-200 md:border-b-0 md:border-r md:border-slate-200">
@@ -3838,6 +3954,7 @@ const ControlPanel: FC = () => {
               {adminActionsView === 'actions' && (
                 <ControlPanelActionsSection
                   styles={styles as unknown as Record<string, string>}
+                  adminActionsDisabled={adminActionsLocked}
                   listboxes={listboxes}
                   initiatedBoxIds={initiatedBoxIds}
                   scoringEnabled={scoringEnabled}
@@ -3867,6 +3984,7 @@ const ControlPanel: FC = () => {
               {adminActionsView === 'public' && (
                 <ControlPanelPublicSection
                   styles={styles as unknown as Record<string, string>}
+                  disabled={adminActionsLocked}
                   openPublicQrDialog={openPublicQrDialog}
                   openPublicRankings={() => {
                     window.open(`${window.location.origin}/#/rankings`, '_blank');
@@ -3877,6 +3995,7 @@ const ControlPanel: FC = () => {
               {adminActionsView === 'upload' && (
                 <ControlPanelUploadSection
                   isOpen={adminActionsView === 'upload'}
+                  disabled={adminActionsLocked}
                   onClose={() => setAdminActionsView('actions')}
                   onUpload={handleUpload}
                 />
@@ -3884,6 +4003,7 @@ const ControlPanel: FC = () => {
 
               {adminActionsView === 'export' && (
                 <ControlPanelExportSection
+                  disabled={adminActionsLocked}
                   listboxes={listboxes}
                   exportBoxId={exportBoxId}
                   onChangeExportBoxId={setExportBoxId}
@@ -4747,6 +4867,7 @@ const ControlPanel: FC = () => {
                   className="modern-btn modern-btn-danger"
                   onClick={() => void applyResetDialog()}
                   disabled={
+                    adminActionsLocked ||
                     !resetDialogOpts.resetTimer &&
                     !resetDialogOpts.clearProgress &&
                     !resetDialogOpts.unmarkAll &&
@@ -4838,7 +4959,7 @@ const ControlPanel: FC = () => {
                   <button
                     className={`modern-btn modern-btn-success ${loadingBoxes.has(idx) ? 'loading' : ''}`}
                     onClick={() => handleInitiate(idx)}
-                    disabled={lb.initiated || loadingBoxes.has(idx)}
+                    disabled={adminActionsLocked || lb.initiated || loadingBoxes.has(idx)}
                   >
                     {loadingBoxes.has(idx) ? (
                       <>
@@ -4855,7 +4976,7 @@ const ControlPanel: FC = () => {
                   <button
                     className={`modern-btn modern-btn-primary btn-press-effect ${loadingBoxes.has(idx) ? 'loading' : ''}`}
                     onClick={() => handleClickStart(idx)}
-                    disabled={!lb.initiated || !hasRemainingCompetitor || loadingBoxes.has(idx)}
+                    disabled={adminActionsLocked || !lb.initiated || !hasRemainingCompetitor || loadingBoxes.has(idx)}
                   >
                     {loadingBoxes.has(idx) ? (
                       <>
@@ -4872,7 +4993,7 @@ const ControlPanel: FC = () => {
                   <button
                     className={`modern-btn modern-btn-danger btn-press-effect ${loadingBoxes.has(idx) ? 'loading' : ''}`}
                     onClick={() => handleClickStop(idx)}
-                    disabled={!lb.initiated || loadingBoxes.has(idx)}
+                    disabled={adminActionsLocked || !lb.initiated || loadingBoxes.has(idx)}
                   >
                     {loadingBoxes.has(idx) ? (
                       <>
@@ -4890,7 +5011,7 @@ const ControlPanel: FC = () => {
                     <button
                       className={`modern-btn modern-btn-primary btn-press-effect ${loadingBoxes.has(idx) ? 'loading' : ''}`}
                       onClick={() => handleClickResume(idx)}
-                      disabled={!lb.initiated || loadingBoxes.has(idx)}
+                      disabled={adminActionsLocked || !lb.initiated || loadingBoxes.has(idx)}
                     >
                       {loadingBoxes.has(idx) ? (
                         <>
@@ -4909,6 +5030,7 @@ const ControlPanel: FC = () => {
                       className="modern-btn modern-btn-primary flex-1 btn-press-effect"
                       onClick={() => handleClickHold(idx)}
                       disabled={
+                        adminActionsLocked ||
                         !lb.initiated ||
                         !isRunning ||
                         (Number(lb.holdsCount ?? 0) > 0 &&
@@ -4936,6 +5058,7 @@ const ControlPanel: FC = () => {
                       style={{ minWidth: '60px' }}
                       onClick={() => handleHalfHoldClick(idx)}
                       disabled={
+                        adminActionsLocked ||
                         !lb.initiated ||
                         !isRunning ||
                         usedHalfHold[idx] ||
@@ -5000,7 +5123,7 @@ const ControlPanel: FC = () => {
                       }
                     })();
                   }}
-                  disabled={!lb.initiated || !hasRemainingCompetitor}
+                  disabled={adminActionsLocked || !lb.initiated || !hasRemainingCompetitor}
                 >
                   📊 Insert Score
                 </button>
@@ -5020,7 +5143,7 @@ const ControlPanel: FC = () => {
                 <button
                   className="modern-btn modern-btn-success btn-press-effect"
                   onClick={() => handleNextRoute(idx)}
-                  disabled={!lb.concurenti.every((c) => c.marked)}
+                  disabled={adminActionsLocked || !lb.concurenti.every((c) => c.marked)}
                 >
                   ➡️ Next Route
                 </button>
@@ -5029,12 +5152,14 @@ const ControlPanel: FC = () => {
                   <button
                     className="modern-btn modern-btn-warning hover-lift"
                     onClick={() => openResetDialog(idx)}
+                    disabled={adminActionsLocked}
                   >
                     🔄 Reset
                   </button>
                   <button
                     className="modern-btn modern-btn-danger hover-lift"
                     onClick={() => void handleDeleteWithConfirm(idx)}
+                    disabled={adminActionsLocked}
                   >
                     🗑️ Delete
                   </button>

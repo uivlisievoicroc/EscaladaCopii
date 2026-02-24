@@ -2,6 +2,7 @@ import React, { FC, Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AppStateProvider } from './utilis/useAppState';
+import { AdminSecurityProvider } from './utilis/useAdminSecurity';
 import {
   ControlPanelSkeleton,
   ContestPageSkeleton,
@@ -68,56 +69,58 @@ const AdminAuditPageWithSkeleton: FC = () => (
 const App: FC = () => {
   return (
     <ErrorBoundary>
-      <AppStateProvider>
-        <Routes>
-          <Route path="/" element={<ControlPanelWithSkeleton />} />
-          <Route path="/contest/:boxId" element={<ContestPageWithSkeleton />} />
-          <Route path="/judge/:boxId" element={<JudgePageWithSkeleton />} />
-          <Route path="/rankings" element={<RankingsPageWithSkeleton />} />
-          <Route path="/admin/audit" element={<AdminAuditPageWithSkeleton />} />
-          <Route
-            path="/theme-demo"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <ThemeDemo />
-              </Suspense>
-            }
-          />
-          {/* Public routes (QR access, no auth) */}
-          <Route
-            path="/public"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <PublicHub />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/public/rankings"
-            element={
-              <Suspense fallback={<RankingsPageSkeleton />}>
-                <PublicRankings />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/public/officials"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <PublicOfficials />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/public/live-climbing/:boxId"
-            element={
-              <Suspense fallback={<ContestPageSkeleton />}>
-                <PublicLiveClimbing />
-              </Suspense>
-            }
-          />
-        </Routes>
-      </AppStateProvider>
+      <AdminSecurityProvider>
+        <AppStateProvider>
+          <Routes>
+            <Route path="/" element={<ControlPanelWithSkeleton />} />
+            <Route path="/contest/:boxId" element={<ContestPageWithSkeleton />} />
+            <Route path="/judge/:boxId" element={<JudgePageWithSkeleton />} />
+            <Route path="/rankings" element={<RankingsPageWithSkeleton />} />
+            <Route path="/admin/audit" element={<AdminAuditPageWithSkeleton />} />
+            <Route
+              path="/theme-demo"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <ThemeDemo />
+                </Suspense>
+              }
+            />
+            {/* Public routes (QR access, no auth) */}
+            <Route
+              path="/public"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <PublicHub />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/public/rankings"
+              element={
+                <Suspense fallback={<RankingsPageSkeleton />}>
+                  <PublicRankings />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/public/officials"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <PublicOfficials />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/public/live-climbing/:boxId"
+              element={
+                <Suspense fallback={<ContestPageSkeleton />}>
+                  <PublicLiveClimbing />
+                </Suspense>
+              }
+            />
+          </Routes>
+        </AppStateProvider>
+      </AdminSecurityProvider>
     </ErrorBoundary>
   );
 };

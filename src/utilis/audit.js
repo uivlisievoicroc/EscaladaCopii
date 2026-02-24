@@ -1,4 +1,8 @@
 import { fetchWithRetry } from './fetch';
+import {
+  getAdminSecurityHeaders,
+  handleAdminSecurityErrorResponse,
+} from './adminSecurityService';
 
 const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
 const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/admin`;
@@ -22,8 +26,10 @@ export async function fetchAuditEvents({ boxId, limit = 200, includePayload = fa
   const res = await fetchWithRetry(`${API_BASE}/audit/events?${params.toString()}`, {
     method: 'GET',
     credentials: 'include',
+    headers: getAdminSecurityHeaders(),
   });
   if (!res.ok) {
+    await handleAdminSecurityErrorResponse(res);
     const text = await res.text();
     throw new Error(text || `Audit fetch failed (${res.status})`);
   }

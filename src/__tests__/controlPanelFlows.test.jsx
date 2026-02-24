@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, fireEvent } from '@testing-library/react';
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import ControlPanel from '../components/ControlPanel';
@@ -22,6 +22,21 @@ vi.mock('../utilis/auth', () => ({
   clearAuth: vi.fn(),
   logout: vi.fn(),
   login: vi.fn(),
+}));
+
+vi.mock('../utilis/useAdminSecurity', () => ({
+  useAdminSecurity: () => ({
+    licenseValid: true,
+    licenseReason: 'ok',
+    adminUnlocked: true,
+    adminToken: 'test-usb-token',
+    sseConnected: true,
+    loading: false,
+    refreshStatus: vi.fn(),
+    unlock: vi.fn(),
+    lock: vi.fn(),
+  }),
+  AdminSecurityProvider: ({ children }) => <>{children}</>,
 }));
 
 let consoleWarnSpy;
@@ -295,5 +310,65 @@ describe('ControlPanel button flows', () => {
     const submit = cmdCalls.find((c) => c.body.includes('"type":"SUBMIT_SCORE"'));
     expect(submit).toBeTruthy();
     expect(submit.body).toContain('"competitor":"Ion"');
+  });
+
+  it('clears per-box persisted keys when deleting the last box', async () => {
+    global.localStorage.getItem.mockReset();
+    global.localStorage.setItem.mockReset();
+    global.localStorage.removeItem.mockReset();
+
+    const listboxes = [
+      {
+        categorie: 'U16-Baieti',
+        routesCount: 1,
+        holdsCounts: [10],
+        routeIndex: 1,
+        holdsCount: 10,
+        initiated: true,
+        timerPreset: '05:00',
+        concurenti: [{ nume: 'Ion', club: 'Alpin', marked: false }],
+      },
+    ];
+
+    global.localStorage.getItem.mockImplementation((key) => {
+      if (key === 'listboxes') return JSON.stringify(listboxes);
+      if (key === 'climbingTime') return JSON.stringify('05:00');
+      if (key === 'timer-0') return '123';
+      if (key === 'timeCriterionEnabled-0') return 'on';
+      if (key === 'routesetterName-0-1') return 'Test Routesetter';
+      return null;
+    });
+
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      await act(async () => {
+        render(
+          <MemoryRouter>
+            <ControlPanel />
+          </MemoryRouter>,
+        );
+      });
+
+      const deleteButton = await screen.findByRole('button', { name: /delete/i });
+      await act(async () => {
+        deleteButton.click();
+      });
+
+      await waitFor(() => {
+        expect(global.localStorage.removeItem).toHaveBeenCalledWith('escalada_timeCriterionEnabled-0');
+      });
+
+      expect(global.localStorage.removeItem).toHaveBeenCalledWith('timeCriterionEnabled-0');
+      expect(global.localStorage.removeItem).toHaveBeenCalledWith('escalada_timeCriterionEnabled');
+      expect(global.localStorage.removeItem).toHaveBeenCalledWith('timeCriterionEnabled');
+      expect(global.localStorage.removeItem).toHaveBeenCalledWith('escalada_timer-0');
+      expect(global.localStorage.removeItem).toHaveBeenCalledWith('timer-0');
+      expect(global.localStorage.removeItem).toHaveBeenCalledWith('escalada_routesetterName-0-1');
+      expect(global.localStorage.removeItem).toHaveBeenCalledWith('routesetterName-0-1');
+    } finally {
+      confirmSpy.mockRestore();
+    }
   });
 });

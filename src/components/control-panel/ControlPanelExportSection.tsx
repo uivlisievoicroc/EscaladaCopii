@@ -3,6 +3,7 @@ import type { Box } from '../../types';
 import AdminExportOfficialView from '../AdminExportOfficialView';
 
 type Props = {
+  disabled: boolean;
   listboxes: Box[];
   exportBoxId: number;
   onChangeExportBoxId: (value: number) => void;
@@ -10,12 +11,14 @@ type Props = {
 };
 
 const ControlPanelExportSection: FC<Props> = ({
+  disabled,
   listboxes,
   exportBoxId,
   onChangeExportBoxId,
   onExport,
 }) => (
   <AdminExportOfficialView
+    disabled={disabled}
     listboxes={listboxes}
     exportBoxId={exportBoxId}
     onChangeExportBoxId={onChangeExportBoxId}

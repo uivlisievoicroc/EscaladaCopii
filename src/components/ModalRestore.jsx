@@ -1,5 +1,9 @@
 import React, { useState } from 'react';
 import { debugError } from '../utilis/debug';
+import {
+  getAdminSecurityHeaders,
+  handleAdminSecurityErrorResponse,
+} from '../utilis/adminSecurityService';
 
 const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
 const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/admin`;
@@ -24,10 +28,15 @@ const ModalRestore = ({ isOpen, onClose, onSuccess }) => {
       const payload = JSON.parse(text);
       const res = await fetch(`${API_BASE}/restore`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminSecurityHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'include',
         body: JSON.stringify(payload),
       });
+      const handledSecurityLock = await handleAdminSecurityErrorResponse(res);
+      if (handledSecurityLock) {
+        setError('Admin actions are locked. Connect USB key and press Unlock.');
+        return;
+      }
       if (res.status === 409) {
         const detail = await res.json();
         setError(`Conflict la restore: ${JSON.stringify(detail.detail || detail)}`);

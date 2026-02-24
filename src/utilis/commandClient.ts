@@ -1,6 +1,10 @@
 import { debugError } from './debug';
 import { fetchWithRetry } from './fetch';
 import { clearAuth } from './auth';
+import {
+  getAdminSecurityHeaders,
+  handleAdminSecurityErrorResponse,
+} from './adminSecurityService';
 
 const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
 
@@ -20,30 +24,37 @@ const DEFAULT_OPTIONS: Required<RequestJsonOptions> = {
   timeoutMs: 5000,
 };
 
-async function getErrorMessage(response: Response): Promise<string> {
-  try {
-    const errorData = await response.json();
-    return errorData?.detail || `HTTP ${response.status}: ${response.statusText}`;
-  } catch {
-    return `HTTP ${response.status}: ${response.statusText}`;
-  }
-}
-
 export async function validateApiResponse(
   response: Response,
   commandType: string,
 ): Promise<void> {
   if (response.ok) return;
-  const errorMsg = await getErrorMessage(response);
-  if (response.status === 401 || response.status === 403) {
+  let errorData: any = null;
+  try {
+    errorData = await response.clone().json();
+  } catch {
+    errorData = null;
+  }
+
+  const handledSecurityLock = await handleAdminSecurityErrorResponse(response);
+  if ((response.status === 401 || response.status === 403) && !handledSecurityLock) {
     clearAuth();
   }
+  const errorMsg =
+    errorData?.detail?.reason ||
+    errorData?.reason ||
+    errorData?.detail ||
+    `HTTP ${response.status}: ${response.statusText}`;
   const error = new Error(`[${commandType}] ${errorMsg}`) as Error & {
     status?: number;
     commandType?: string;
+    code?: string;
   };
   error.status = response.status;
   error.commandType = commandType;
+  error.code =
+    errorData?.code ||
+    (errorData?.detail && typeof errorData.detail === 'object' ? errorData.detail.code : undefined);
   debugError(`Command failed: ${commandType}`, error);
   throw error;
 }
@@ -74,7 +85,7 @@ export async function postCmd<T = any>(
     API_ENDPOINTS.CMD,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAdminSecurityHeaders({ 'Content-Type': 'application/json' }),
       credentials: 'include',
       body: JSON.stringify(body),
     },
@@ -100,12 +111,13 @@ export async function requestAdminJson<T = any>(
   commandType: string,
   body?: Record<string, unknown>,
 ): Promise<T> {
+  const headers = getAdminSecurityHeaders(body ? { 'Content-Type': 'application/json' } : undefined);
   return requestJson<T>(
     `${API_ENDPOINTS.ADMIN}${path}`,
     {
       method,
       credentials: 'include',
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: Object.keys(headers).length ? headers : undefined,
       body: body ? JSON.stringify(body) : undefined,
     },
     commandType,

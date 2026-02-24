@@ -8,6 +8,7 @@ type BoxLike = {
 
 type Props = {
   styles: Record<string, string>;
+  adminActionsDisabled: boolean;
   listboxes: BoxLike[];
   initiatedBoxIds: number[];
   scoringEnabled: boolean;
@@ -35,6 +36,7 @@ type Props = {
 
 const ControlPanelActionsSection: FC<Props> = ({
   styles,
+  adminActionsDisabled,
   listboxes,
   initiatedBoxIds,
   scoringEnabled,
@@ -72,7 +74,7 @@ const ControlPanelActionsSection: FC<Props> = ({
               const value = e.target.value;
               setScoringBoxId(value === '' ? null : Number(value));
             }}
-            disabled={!scoringEnabled}
+            disabled={adminActionsDisabled || !scoringEnabled}
           >
             {scoringEnabled ? (
               initiatedBoxIds.map((idx) => (
@@ -94,7 +96,7 @@ const ControlPanelActionsSection: FC<Props> = ({
           <button
             className="modern-btn modern-btn-ghost"
             onClick={openModifyScoreFromAdmin}
-            disabled={!scoringBoxSelected || !scoringBoxHasMarked}
+            disabled={adminActionsDisabled || !scoringBoxSelected || !scoringBoxHasMarked}
             type="button"
           >
             Modify score
@@ -102,7 +104,7 @@ const ControlPanelActionsSection: FC<Props> = ({
           <button
             className="modern-btn modern-btn-ghost"
             onClick={openCeremonyFromAdmin}
-            disabled={!scoringBoxSelected}
+            disabled={adminActionsDisabled || !scoringBoxSelected}
             type="button"
           >
             Award ceremony
@@ -110,7 +112,7 @@ const ControlPanelActionsSection: FC<Props> = ({
           <button
             className="modern-btn modern-btn-ghost"
             onClick={openShowTieBreaksDialog}
-            disabled={!showTieBreaksEnabled}
+            disabled={adminActionsDisabled || !showTieBreaksEnabled}
             type="button"
           >
             Show Tie-breaks
@@ -129,7 +131,7 @@ const ControlPanelActionsSection: FC<Props> = ({
               const value = e.target.value;
               setJudgeAccessBoxId(value === '' ? null : Number(value));
             }}
-            disabled={!judgeAccessEnabled}
+            disabled={adminActionsDisabled || !judgeAccessEnabled}
           >
             {judgeAccessEnabled ? (
               listboxes.map((b, idx) => (
@@ -154,7 +156,7 @@ const ControlPanelActionsSection: FC<Props> = ({
               if (judgeAccessBoxId == null) return;
               openSetJudgePasswordDialog(judgeAccessBoxId);
             }}
-            disabled={!judgeAccessSelected}
+            disabled={adminActionsDisabled || !judgeAccessSelected}
             type="button"
           >
             Set judge password
@@ -165,7 +167,7 @@ const ControlPanelActionsSection: FC<Props> = ({
               if (judgeAccessBoxId == null) return;
               openQrDialog(judgeAccessBoxId);
             }}
-            disabled={!judgeAccessSelected}
+            disabled={adminActionsDisabled || !judgeAccessSelected}
             type="button"
           >
             Generate QR
@@ -173,7 +175,7 @@ const ControlPanelActionsSection: FC<Props> = ({
           <button
             className="modern-btn modern-btn-ghost"
             onClick={openJudgeViewFromAdmin}
-            disabled={!judgeAccessSelected || !judgeAccessBox?.initiated}
+            disabled={adminActionsDisabled || !judgeAccessSelected || !judgeAccessBox?.initiated}
             type="button"
           >
             Open judge view
@@ -187,12 +189,12 @@ const ControlPanelActionsSection: FC<Props> = ({
           <span className={styles.modalLabel}>Select category</span>
           <select
             className={styles.modalSelect}
-            value={setupBoxId ?? (listboxes.length > 0 ? 0 : '')}
+            value={listboxes.length === 0 ? '' : setupBoxId ?? 0}
             onChange={(e) => {
               const value = e.target.value;
               setSetupBoxId(value === '' ? null : Number(value));
             }}
-            disabled={listboxes.length === 0}
+            disabled={adminActionsDisabled || listboxes.length === 0}
           >
             {listboxes.length === 0 ? (
               <option value="">No boxes available</option>
@@ -209,7 +211,7 @@ const ControlPanelActionsSection: FC<Props> = ({
           <button
             className="modern-btn modern-btn-ghost"
             onClick={() => openBoxTimerDialog(setupBoxId)}
-            disabled={setupBoxId == null}
+            disabled={adminActionsDisabled || listboxes.length === 0 || setupBoxId == null}
             type="button"
           >
             Set timer
@@ -217,7 +219,7 @@ const ControlPanelActionsSection: FC<Props> = ({
           <button
             className="modern-btn modern-btn-ghost"
             onClick={() => openRoutesetterDialog(setupBoxId)}
-            disabled={setupBoxId == null}
+            disabled={adminActionsDisabled || listboxes.length === 0 || setupBoxId == null}
             type="button"
           >
             Set competition officials

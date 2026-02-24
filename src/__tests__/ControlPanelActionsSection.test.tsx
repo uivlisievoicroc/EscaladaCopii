@@ -13,6 +13,7 @@ const baseStyles = {
 
 const baseProps = {
   styles: baseStyles,
+  adminActionsDisabled: false,
   listboxes: [{ categorie: 'Seniori', initiated: true }],
   initiatedBoxIds: [0],
   scoringEnabled: true,
@@ -61,5 +62,35 @@ describe('ControlPanelActionsSection - Show Tie-breaks button', () => {
     const button = screen.getByRole('button', { name: 'Show Tie-breaks' });
     expect(button).toBeDisabled();
   });
+
+  it('disables admin actions when admin lock is active', () => {
+    render(
+      <ControlPanelActionsSection
+        {...baseProps}
+        adminActionsDisabled
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Modify score' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Set judge password' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Set timer' })).toBeDisabled();
+  });
 });
 
+describe('ControlPanelActionsSection - Setup buttons', () => {
+  it('disables Setup actions when no boxes exist even if setupBoxId is stale', () => {
+    render(
+      <ControlPanelActionsSection
+        {...baseProps}
+        listboxes={[]}
+        initiatedBoxIds={[]}
+        scoringEnabled={false}
+        judgeAccessEnabled={false}
+        setupBoxId={0}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Set timer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Set competition officials' })).toBeDisabled();
+  });
+});
