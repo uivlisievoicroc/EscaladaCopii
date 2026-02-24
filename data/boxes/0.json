@@ -1,0 +1,87 @@
+{
+  "initiated": true,
+  "holdsCount": 22,
+  "currentClimber": "Alexandru Radu",
+  "preparingClimber": "Nicolici Radu",
+  "started": false,
+  "timerState": "idle",
+  "holdCount": 0.0,
+  "routeIndex": 1,
+  "routesCount": 1,
+  "holdsCounts": [
+    22
+  ],
+  "competitors": [
+    {
+      "nume": "Cireap Paul",
+      "marked": true,
+      "club": "One Move"
+    },
+    {
+      "nume": "Leonte Matei",
+      "marked": true,
+      "club": "A.C Repedea"
+    },
+    {
+      "nume": "Alexandru Radu",
+      "marked": false,
+      "club": "Știința Politehnica"
+    },
+    {
+      "nume": "Nicolici Radu",
+      "marked": false,
+      "club": "One Move"
+    }
+  ],
+  "categorie": "3",
+  "lastRegisteredTime": 6.0,
+  "remaining": 300.0,
+  "timerPreset": "05:00",
+  "timerPresetSec": 300,
+  "timerRemainingSec": 300.0,
+  "timerEndsAtMs": null,
+  "timeCriterionEnabled": true,
+  "timeTiebreakPreference": null,
+  "timeTiebreakResolvedFingerprint": null,
+  "timeTiebreakResolvedDecision": null,
+  "timeTiebreakDecisions": {},
+  "prevRoundsTiebreakPreference": "yes",
+  "prevRoundsTiebreakResolvedFingerprint": "tb3:2072f25e50c5a8c8a8ffe999221119d284ffd6cb",
+  "prevRoundsTiebreakResolvedDecision": "yes",
+  "prevRoundsTiebreakDecisions": {
+    "tb3:2072f25e50c5a8c8a8ffe999221119d284ffd6cb": "yes"
+  },
+  "prevRoundsTiebreakOrders": {},
+  "prevRoundsTiebreakRanks": {
+    "tb3:2072f25e50c5a8c8a8ffe999221119d284ffd6cb": {
+      "Cireap Paul": 1,
+      "Leonte Matei": 2
+    }
+  },
+  "prevRoundsTiebreakLineageRanks": {
+    "tb-lineage:fccc68a4c61f1a8da495511360fea9f1176516cc": {
+      "Cireap Paul": 1,
+      "Leonte Matei": 2
+    }
+  },
+  "sessionId": "08e6afca-2310-4a30-8061-782643f1b616",
+  "boxVersion": 29,
+  "leadTiebreakBadgesByName": {},
+  "leadTiebreakBadgesRouteIndex": 1,
+  "scores": {
+    "Cireap Paul": [
+      7.0
+    ],
+    "Leonte Matei": [
+      7.0
+    ]
+  },
+  "times": {
+    "Cireap Paul": [
+      31.0
+    ],
+    "Leonte Matei": [
+      6.0
+    ]
+  }
+}

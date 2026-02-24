@@ -27,11 +27,13 @@ from escalada.api.audit import router as audit_router
 from escalada.api.auth import router as auth_router
 from escalada.api.backup import collect_snapshots, router as backup_router, write_backup_file
 from escalada.api.health import router as health_router
+from escalada.api.license import router as license_router
 from escalada.api.live import router as live_router
 from escalada.api.public import router as public_router
 from escalada.api.ops import router as ops_router
 from escalada.api.podium import router as podium_router
 from escalada.api.save_ranking import router as save_ranking_router
+from escalada.security import admin_session, license_events, usb_license
 from escalada.routers.upload import router as upload_router
 from escalada.rate_limit import cleanup_rate_limit_data
 
@@ -47,7 +49,13 @@ logger = logging.getLogger(__name__)
 
 # -------------------- Environment configuration --------------------
 # Load `.env` early because we use env vars for CORS, auth, and background task tuning.
-load_dotenv()
+_DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=_DOTENV_PATH, override=False)
+# In local/dev usage it's very common to have stale exported env vars. Prefer the repo `.env` unless
+# explicitly running in production.
+_env_marker = (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower()
+if _env_marker not in {"prod", "production"}:
+    load_dotenv(dotenv_path=_DOTENV_PATH, override=True)
 
 
 def _is_production_env() -> bool:
@@ -76,10 +84,12 @@ BACKUP_INTERVAL_MIN = int(os.getenv("BACKUP_INTERVAL_MIN", "10"))
 BACKUP_RETENTION_FILES = int(os.getenv("BACKUP_RETENTION_FILES", "20"))
 BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")
 RATE_LIMIT_CLEANUP_INTERVAL_MIN = int(os.getenv("RATE_LIMIT_CLEANUP_INTERVAL_MIN", "5"))
+USB_WATCHDOG_INTERVAL_SEC = int(os.getenv("USB_WATCHDOG_INTERVAL_SEC", "5"))
 
 # References to asyncio Tasks so we can cancel them cleanly on shutdown.
 backup_task: asyncio.Task | None = None
 rate_limit_cleanup_task: asyncio.Task | None = None
+usb_watchdog_task: asyncio.Task | None = None
 
 
 async def run_migrations() -> None:
@@ -133,8 +143,52 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.warning("Rate limit cleanup failed: %s", exc)
 
+    async def _usb_watchdog_loop():
+        """
+        Watch USB license transitions and enforce auto-lock.
+
+        Rules:
+        - Track valid -> invalid transitions and publish `license_status_changed`
+        - If admin USB session is unlocked and license becomes invalid, auto-lock and publish
+          `admin_locked`
+        """
+        previous_valid: bool | None = None
+        while True:
+            try:
+                await asyncio.sleep(max(USB_WATCHDOG_INTERVAL_SEC, 1))
+                status = usb_license.check_license(force_refresh=True)
+                current_valid = bool(status.get("valid"))
+                if previous_valid is None:
+                    previous_valid = current_valid
+                elif current_valid != previous_valid:
+                    await license_events.publish(
+                        "license_status_changed",
+                        {
+                            "valid": current_valid,
+                            "reason": status.get("reason"),
+                            "mountpoint": status.get("mountpoint"),
+                            "checked_at": status.get("checked_at"),
+                        },
+                    )
+                    previous_valid = current_valid
+
+                if not current_valid and await admin_session.is_unlocked():
+                    locked = await admin_session.lock()
+                    if locked:
+                        await license_events.publish(
+                            "admin_locked",
+                            {
+                                "reason": "license_invalid",
+                                "license_reason": status.get("reason"),
+                            },
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("USB watchdog failed: %s", exc)
+
     # Start background tasks if enabled (interval > 0).
-    global backup_task, rate_limit_cleanup_task
+    global backup_task, rate_limit_cleanup_task, usb_watchdog_task
     if BACKUP_INTERVAL_MIN > 0:
         backup_task = asyncio.create_task(_backup_loop())
     else:
@@ -144,6 +198,11 @@ async def lifespan(app: FastAPI):
         rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
     else:
         rate_limit_cleanup_task = None
+
+    if USB_WATCHDOG_INTERVAL_SEC > 0:
+        usb_watchdog_task = asyncio.create_task(_usb_watchdog_loop())
+    else:
+        usb_watchdog_task = None
 
     yield
 
@@ -161,6 +220,13 @@ async def lifespan(app: FastAPI):
         rate_limit_cleanup_task.cancel()
         try:
             await rate_limit_cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    if usb_watchdog_task:
+        usb_watchdog_task.cancel()
+        try:
+            await usb_watchdog_task
         except asyncio.CancelledError:
             pass
 
@@ -253,6 +319,7 @@ app.include_router(live_router, prefix="/api")
 app.include_router(public_router, prefix="/api")
 app.include_router(podium_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
+app.include_router(license_router, prefix="/api")
 
 # Admin routers (restricted endpoints)
 app.include_router(backup_router, prefix="/api/admin")

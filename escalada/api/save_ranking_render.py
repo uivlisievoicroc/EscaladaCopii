@@ -36,7 +36,12 @@ except Exception:
     DEFAULT_FONT = "Helvetica"
 
 
-def df_to_pdf(df: pd.DataFrame, pdf_path: Path, title: str = "Ranking") -> None:
+def df_to_pdf(
+    df: pd.DataFrame,
+    pdf_path: Path,
+    title: str = "Ranking",
+    notes: list[str] | None = None,
+) -> None:
     """Render a DataFrame as a simple landscape-A4 PDF table."""
     doc = SimpleDocTemplate(
         str(pdf_path),
@@ -55,6 +60,15 @@ def df_to_pdf(df: pd.DataFrame, pdf_path: Path, title: str = "Ranking") -> None:
         fontSize=18,
         fontName=DEFAULT_FONT,
         spaceAfter=12,
+    )
+    note_style = ParagraphStyle(
+        "NoteStyle",
+        parent=styles["BodyText"],
+        fontName=DEFAULT_FONT,
+        fontSize=9,
+        leading=11,
+        textColor=colors.HexColor("#333333"),
+        spaceAfter=4,
     )
 
     data = [df.columns.tolist()] + df.astype(str).values.tolist()
@@ -77,4 +91,11 @@ def df_to_pdf(df: pd.DataFrame, pdf_path: Path, title: str = "Ranking") -> None:
     table.setStyle(tbl_style)
 
     elements = [Paragraph(title, title_style), Spacer(1, 12), table]
+    note_lines = []
+    if isinstance(notes, list):
+        note_lines = [line.strip() for line in notes if isinstance(line, str) and line.strip()]
+    if note_lines:
+        elements.append(Spacer(1, 10))
+        for line in note_lines:
+            elements.append(Paragraph(line, note_style))
     doc.build(elements)

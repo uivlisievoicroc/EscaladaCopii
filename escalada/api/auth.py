@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
-from escalada.auth.deps import get_current_claims, require_role
+from escalada.auth.deps import get_current_claims, require_admin_action
 from escalada.auth.service import create_access_token, hash_password, verify_password
 from escalada.storage.json_store import load_users, save_users
 
@@ -147,7 +147,7 @@ async def magic_login(payload: MagicLoginRequest) -> TokenResponse:
 
 
 @router.post("/admin/auth/boxes/{box_id}/magic-token")
-async def issue_magic_token(box_id: int, claims=Depends(require_role(["admin"]))):
+async def issue_magic_token(box_id: int, claims=Depends(require_admin_action)):
     """Magic tokens dezactivate."""
     raise HTTPException(status_code=status.HTTP_410_GONE, detail="magic_token_disabled")
 
@@ -161,7 +161,7 @@ class SetJudgePasswordRequest(BaseModel):
 async def set_judge_password(
     box_id: int,
     payload: SetJudgePasswordRequest,
-    claims=Depends(require_role(["admin"])),
+    claims=Depends(require_admin_action),
 ):
     """Setează/creează parola pentru userul judge al box-ului (implicit username=Box {id})."""
     users = load_users()

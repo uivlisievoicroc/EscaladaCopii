@@ -7,6 +7,33 @@ from typing import Any
 
 import pandas as pd
 
+TB_TIME_LABEL = "TB Time"
+TB_PREV_LABEL = "TB Prev"
+TB_NOTES = (
+    "Nota: TB Prev = departajare dupa rundele anterioare.",
+    "TB Time = departajare dupa timp (mai mic e mai bun).",
+)
+
+
+def tb_label(tb_time: bool, tb_prev: bool) -> str:
+    if tb_time:
+        return TB_TIME_LABEL
+    if tb_prev:
+        return TB_PREV_LABEL
+    return ""
+
+
+def tb_notes_for_df(df: pd.DataFrame) -> list[str] | None:
+    if "TB" not in df.columns:
+        return None
+    has_tb = any(
+        isinstance(value, str) and value.strip()
+        for value in df["TB"].tolist()
+    )
+    if not has_tb:
+        return None
+    return list(TB_NOTES)
+
 
 def to_seconds(val) -> int | None:
     """Normalize various time representations into integer seconds."""
@@ -131,29 +158,22 @@ def build_overall_df(
             prev_total = total
             prev_rank = rank
 
-    if tb_time_flags:
-        tb_values = []
-        if rank_override:
-            for name, _ in rows_data:
-                tb_values.append("TB Time" if tb_time_flags.get(name) else "")
-        else:
-            for _, row in df.iterrows():
-                name = str(row["Nume"])
-                tb_values.append("TB Time" if tb_time_flags.get(name) else "")
-        if any(tb_values):
-            df["TB Time"] = tb_values
-
-    if tb_prev_flags:
-        prev_values = []
-        if rank_override:
-            for name, _ in rows_data:
-                prev_values.append("TB Prev" if tb_prev_flags.get(name) else "")
-        else:
-            for _, row in df.iterrows():
-                name = str(row["Nume"])
-                prev_values.append("TB Prev" if tb_prev_flags.get(name) else "")
-        if any(prev_values):
-            df["TB Prev"] = prev_values
+    tb_time_flags = tb_time_flags or {}
+    tb_prev_flags = tb_prev_flags or {}
+    if rank_override:
+        ordered_names = [name for name, _ in rows_data]
+    else:
+        ordered_names = [str(row["Nume"]) for _, row in df.iterrows()]
+    tb_values = [
+        tb_label(
+            bool(tb_time_flags.get(name)),
+            bool(tb_prev_flags.get(name)),
+        )
+        for name in ordered_names
+    ]
+    if any(tb_values):
+        insert_at = int(df.columns.get_loc("Nume")) + 1
+        df.insert(insert_at, "TB", tb_values)
 
     df.insert(0, "Rank", ranks)
     return df

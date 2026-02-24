@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from escalada.api import live
 from escalada.api.official_export import build_official_results_zip, safe_zip_component
 from escalada.api.save_ranking import _build_overall_df, _format_time
-from escalada.auth.deps import require_role
+from escalada.auth.deps import require_admin_action
 from escalada.storage.json_store import save_box_state
 
 router = APIRouter()
@@ -56,6 +56,18 @@ def _snapshot_from_state(box_id: int, state: Dict[str, Any]) -> Dict[str, Any]:
         "registeredTime": state.get("lastRegisteredTime"),
         "remaining": remaining,
         "timeCriterionEnabled": state.get("timeCriterionEnabled", False),
+        "timeTiebreakPreference": state.get("timeTiebreakPreference"),
+        "timeTiebreakDecisions": state.get("timeTiebreakDecisions") or {},
+        "timeTiebreakResolvedFingerprint": state.get("timeTiebreakResolvedFingerprint"),
+        "timeTiebreakResolvedDecision": state.get("timeTiebreakResolvedDecision"),
+        "prevRoundsTiebreakPreference": state.get("prevRoundsTiebreakPreference"),
+        "prevRoundsTiebreakDecisions": state.get("prevRoundsTiebreakDecisions") or {},
+        "prevRoundsTiebreakOrders": state.get("prevRoundsTiebreakOrders") or {},
+        "prevRoundsTiebreakRanks": state.get("prevRoundsTiebreakRanks") or {},
+        "prevRoundsTiebreakLineageRanks": state.get("prevRoundsTiebreakLineageRanks")
+        or {},
+        "prevRoundsTiebreakResolvedFingerprint": state.get("prevRoundsTiebreakResolvedFingerprint"),
+        "prevRoundsTiebreakResolvedDecision": state.get("prevRoundsTiebreakResolvedDecision"),
         "timerPreset": state.get("timerPreset"),
         "timerPresetSec": state.get("timerPresetSec"),
         "sessionId": state.get("sessionId"),
@@ -116,7 +128,7 @@ async def _fetch_box_snapshot(box_id: int) -> Dict[str, Any] | None:
 
 
 @router.get("/backup/box/{box_id}")
-async def backup_box(box_id: int, claims=Depends(require_role(["admin"]))):
+async def backup_box(box_id: int, claims=Depends(require_admin_action)):
     snap = await _fetch_box_snapshot(box_id)
     if not snap:
         raise HTTPException(status_code=404, detail="box_not_found")
@@ -124,13 +136,13 @@ async def backup_box(box_id: int, claims=Depends(require_role(["admin"]))):
 
 
 @router.get("/backup/full")
-async def backup_full(claims=Depends(require_role(["admin"]))):
+async def backup_full(claims=Depends(require_admin_action)):
     snapshots = await collect_snapshots()
     return {"status": "ok", "snapshots": snapshots}
 
 
 @router.get("/backup/last")
-async def backup_last(download: bool = False, claims=Depends(require_role(["admin"]))):
+async def backup_last(download: bool = False, claims=Depends(require_admin_action)):
     out_dir = Path(os.getenv("BACKUP_DIR", "backups"))
     last_file = latest_backup_file(out_dir)
     if not last_file:
@@ -148,7 +160,7 @@ async def backup_last(download: bool = False, claims=Depends(require_role(["admi
 
 
 @router.get("/export/box/{box_id}")
-async def export_box_csv(box_id: int, claims=Depends(require_role(["admin"]))):
+async def export_box_csv(box_id: int, claims=Depends(require_admin_action)):
     """Export current state to CSV (lightweight per-box export)."""
 
     snap = await _fetch_box_snapshot(box_id)
@@ -226,7 +238,7 @@ async def export_box_csv(box_id: int, claims=Depends(require_role(["admin"]))):
 
 
 @router.get("/export/official/box/{box_id}")
-async def export_official_results_zip(box_id: int, claims=Depends(require_role(["admin"]))):
+async def export_official_results_zip(box_id: int, claims=Depends(require_admin_action)):
     """Export "official" results bundle (ZIP with XLSX+PDF) for a box."""
 
     snap = await _fetch_box_snapshot(box_id)
@@ -312,7 +324,7 @@ async def restore_snapshots_json(
 
 
 @router.post("/restore")
-async def restore_backup(payload: RestoreRequest, claims=Depends(require_role(["admin"]))):
+async def restore_backup(payload: RestoreRequest, claims=Depends(require_admin_action)):
     restored = await restore_snapshots_json(
         payload.snapshots,
         box_ids=payload.box_ids,

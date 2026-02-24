@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from escalada.api import live
 # Backup helpers operate on snapshots collected from the in-memory state.
 from escalada.api.backup import collect_snapshots, latest_backup_file, write_backup_file
-from escalada.auth.deps import require_role
+from escalada.auth.deps import require_admin_action
 
 # Router is mounted under `/api/ops` (see escalada/main.py).
 router = APIRouter(prefix="/ops", tags=["ops"])
@@ -36,7 +36,7 @@ class DrillRequest(BaseModel):
 
 
 @router.get("/status")
-async def ops_status(claims=Depends(require_role(["admin"]))):
+async def ops_status(claims=Depends(require_admin_action)):
     """Operational status for contest-day checks (JSON-only)."""
 
     # Backup directory is configurable via env; defaults to ./backups.
@@ -68,7 +68,7 @@ async def ops_status(claims=Depends(require_role(["admin"]))):
 
 
 @router.post("/backup/now")
-async def backup_now(claims=Depends(require_role(["admin"]))):
+async def backup_now(claims=Depends(require_admin_action)):
     """Force a backup write to disk (same format as periodic backups)."""
 
     # Collect per-box snapshots, then write a single backup bundle to disk.
@@ -79,7 +79,7 @@ async def backup_now(claims=Depends(require_role(["admin"]))):
 
 
 @router.post("/drill/backup_restore")
-async def drill_backup_restore(payload: DrillRequest, claims=Depends(require_role(["admin"]))):
+async def drill_backup_restore(payload: DrillRequest, claims=Depends(require_admin_action)):
     """Postgres-only drill removed in JSON-only build."""
 
     # Explicitly disabled: restore drills require a transactional DB and are not supported in

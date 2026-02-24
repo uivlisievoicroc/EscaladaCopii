@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from escalada.auth.deps import require_role
+from escalada.auth.deps import require_admin_action
 from escalada.storage.json_store import read_latest_events
 
 router = APIRouter()
@@ -30,7 +30,7 @@ async def list_audit_events(
     box_id: int | None = Query(default=None, alias="boxId"),
     limit: int = Query(default=200, ge=1, le=2000),
     include_payload: bool = Query(default=False, alias="includePayload"),
-    claims=Depends(require_role(["admin"])),
+    claims=Depends(require_admin_action),
 ):
     """Admin-only audit log stream (most recent first)."""
 

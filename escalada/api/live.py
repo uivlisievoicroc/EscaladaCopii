@@ -49,6 +49,7 @@ from escalada_core import (
 )
 from escalada.auth.deps import (
     is_trusted_admin_ip,
+    require_admin_command_action,
     require_box_access,
     require_view_access,
     require_view_box_access,
@@ -385,6 +386,12 @@ async def cmd(cmd: Cmd, request: Request = None, claims=Depends(require_box_acce
     - 10 requests/second per box
     - Per-command-type limits (e.g., PROGRESS_UPDATE: 120/min)
     """
+    if request is not None:
+        await require_admin_command_action(
+            request=request,
+            claims=claims if isinstance(claims, dict) else {},
+            command_type=getattr(cmd, "type", None),
+        )
 
     # Attach actor metadata (username/role/ip/user-agent) to this request so persistence/audit
     # helpers can record "who did what" without passing Request everywhere.

@@ -15,6 +15,7 @@ Important:
 """
 
 # -------------------- Standard library imports --------------------
+import math
 from pathlib import Path
 
 # -------------------- Third-party imports --------------------
@@ -27,10 +28,12 @@ from escalada.api.save_ranking_tables import (
     build_by_route_df,
     build_overall_df,
     format_time,
+    tb_label,
+    tb_notes_for_df,
     to_seconds,
 )
 
-from escalada.auth.deps import require_role
+from escalada.auth.deps import require_admin_action
 
 router = APIRouter()
 
@@ -86,7 +89,7 @@ class RankingIn(BaseModel):
 
 
 @router.post("/save_ranking")
-def save_ranking(payload: RankingIn, claims=Depends(require_role(["admin"]))):
+def save_ranking(payload: RankingIn, claims=Depends(require_admin_action)):
     """
     Persist category rankings to disk (XLSX + PDF).
 
@@ -165,7 +168,12 @@ def save_ranking(payload: RankingIn, claims=Depends(require_role(["admin"]))):
     xlsx_tot = cat_dir / "overall.xlsx"
     pdf_tot = cat_dir / "overall.pdf"
     overall_df.to_excel(xlsx_tot, index=False)
-    _df_to_pdf(overall_df, pdf_tot, title=f"{payload.categorie} – Overall")
+    _df_to_pdf(
+        overall_df,
+        pdf_tot,
+        title=f"{payload.categorie} – Overall",
+        notes=tb_notes_for_df(overall_df),
+    )
     saved_paths = [xlsx_tot, pdf_tot]
 
     # ---------- excel + pdf BY‑ROUTE ----------
@@ -239,31 +247,31 @@ def save_ranking(payload: RankingIn, claims=Depends(require_role(["admin"]))):
                     "Club": payload.clubs.get(name, ""),
                     "Score": score,
                     **({"Time": _format_time(tm)} if use_time else {}),
-                    **(
-                        {
-                            "TB Time": "TB Time"
-                            if is_active_route and active_route_tb_time.get(name)
-                            else ""
-                        }
-                    ),
-                    **(
-                        {
-                            "TB Prev": "TB Prev"
-                            if is_active_route and active_route_tb_prev.get(name)
-                            else ""
-                        }
+                    "TB": tb_label(
+                        bool(is_active_route and active_route_tb_time.get(name)),
+                        bool(is_active_route and active_route_tb_prev.get(name)),
                     ),
                     "Points": points.get(name),
                 }
                 for i, (name, score, tm) in enumerate(route_list_sorted)
             ]
         )
+        if "TB" in df_route.columns and not any(
+            isinstance(value, str) and value.strip()
+            for value in df_route["TB"].tolist()
+        ):
+            df_route.drop(columns=["TB"], inplace=True)
 
         # 5) save Excel and PDF for this route
         xlsx_route = cat_dir / f"route_{r+1}.xlsx"
         pdf_route = cat_dir / f"route_{r+1}.pdf"
         df_route.to_excel(xlsx_route, index=False)
-        _df_to_pdf(df_route, pdf_route, title=f"{payload.categorie} – Route {r+1}")
+        _df_to_pdf(
+            df_route,
+            pdf_route,
+            title=f"{payload.categorie} – Route {r+1}",
+            notes=tb_notes_for_df(df_route),
+        )
         saved_paths.extend([xlsx_route, pdf_route])
 
     return {
@@ -304,5 +312,10 @@ def _to_seconds(val) -> int | None:
     return to_seconds(val)
 
 
-def _df_to_pdf(df: pd.DataFrame, pdf_path: Path, title="Ranking"):
-    return df_to_pdf(df, pdf_path, title=title)
+def _df_to_pdf(
+    df: pd.DataFrame,
+    pdf_path: Path,
+    title: str = "Ranking",
+    notes: list[str] | None = None,
+):
+    return df_to_pdf(df, pdf_path, title=title, notes=notes)

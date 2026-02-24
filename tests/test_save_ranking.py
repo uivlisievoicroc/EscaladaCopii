@@ -250,8 +250,8 @@ class BuildRankingDataTest(unittest.TestCase):
         self.assertEqual(df.iloc[0]["Rank"], 1)
         self.assertEqual(df.iloc[1]["Nume"], "Bob")
         self.assertEqual(df.iloc[1]["Rank"], 2)
-        self.assertIn("TB Time", df.columns)
-        self.assertEqual(df.iloc[0]["TB Time"], "TB Time")
+        self.assertIn("TB", df.columns)
+        self.assertEqual(df.iloc[0]["TB"], "TB Time")
 
     def test_ranking_with_prev_rounds_tiebreak_adds_tb_prev_column(self):
         from escalada.api.save_ranking import _build_overall_df, RankingIn
@@ -296,9 +296,9 @@ class BuildRankingDataTest(unittest.TestCase):
             tb_time_flags=tb_time,
             tb_prev_flags=tb_prev,
         )
-        self.assertIn("TB Prev", df.columns)
+        self.assertIn("TB", df.columns)
         self.assertEqual(df.iloc[0]["Nume"], "Alice")
-        self.assertEqual(df.iloc[0]["TB Prev"], "TB Prev")
+        self.assertEqual(df.iloc[0]["TB"], "TB Prev")
 
     def test_ranking_empty_scores(self):
         """Test ranking with empty scores dict"""

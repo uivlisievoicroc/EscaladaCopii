@@ -39,6 +39,7 @@ from escalada.api.save_ranking import (
     _to_seconds,
 )
 from escalada.api.ranking_time_tiebreak import resolve_rankings_with_time_tiebreak
+from escalada.api.save_ranking_tables import tb_label, tb_notes_for_df
 
 
 def safe_zip_component(val: str) -> str:
@@ -190,16 +191,17 @@ def _build_route_df(
         if use_time_tiebreak:
             # Legacy flag: currently display-only (no time-based tie-breaking here).
             row["Time"] = _format_time(tm)
-        if tb_time_flags:
-            row["TB Time"] = "TB Time" if tb_time_flags.get(name) else ""
-        if tb_prev_flags:
-            row["TB Prev"] = "TB Prev" if tb_prev_flags.get(name) else ""
+        row["TB"] = tb_label(
+            bool((tb_time_flags or {}).get(name)),
+            bool((tb_prev_flags or {}).get(name)),
+        )
         rows.append(row)
     df = pd.DataFrame(rows)
-    if "TB Time" in df.columns and not any(bool(v) for v in df["TB Time"].tolist()):
-        df.drop(columns=["TB Time"], inplace=True)
-    if "TB Prev" in df.columns and not any(bool(v) for v in df["TB Prev"].tolist()):
-        df.drop(columns=["TB Prev"], inplace=True)
+    if "TB" in df.columns and not any(
+        isinstance(value, str) and value.strip()
+        for value in df["TB"].tolist()
+    ):
+        df.drop(columns=["TB"], inplace=True)
     return df
 
 
@@ -332,7 +334,12 @@ def build_official_results_zip(snapshot: dict[str, Any]) -> bytes:
         overall_xlsx = tmp_dir / "overall.xlsx"
         overall_pdf = tmp_dir / "overall.pdf"
         overall_df.to_excel(overall_xlsx, index=False)
-        _df_to_pdf(overall_df, overall_pdf, title=f"{categorie} – Overall")
+        _df_to_pdf(
+            overall_df,
+            overall_pdf,
+            title=f"{categorie} – Overall",
+            notes=tb_notes_for_df(overall_df),
+        )
 
         file_paths: list[Path] = [overall_xlsx, overall_pdf]
 
@@ -352,7 +359,12 @@ def build_official_results_zip(snapshot: dict[str, Any]) -> bytes:
             xlsx_route = tmp_dir / f"route_{r+1}.xlsx"
             pdf_route = tmp_dir / f"route_{r+1}.pdf"
             df_route.to_excel(xlsx_route, index=False)
-            _df_to_pdf(df_route, pdf_route, title=f"{categorie} – Route {r+1}")
+            _df_to_pdf(
+                df_route,
+                pdf_route,
+                title=f"{categorie} – Route {r+1}",
+                notes=tb_notes_for_df(df_route),
+            )
             file_paths.extend([xlsx_route, pdf_route])
 
         # Include metadata for traceability/debugging (no personal data beyond names/clubs).

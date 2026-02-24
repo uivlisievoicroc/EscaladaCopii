@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 # -------------------- Local application imports --------------------
-from escalada.auth.deps import require_role
+from escalada.auth.deps import require_admin_action
 from escalada.api import live as live_module
 
 # Router is mounted under `/api/admin` (see escalada/main.py).
@@ -87,7 +87,7 @@ async def upload_listbox(
     holdsCounts: str = Form(...),
     file: UploadFile = File(...),
     include_clubs: str = Form(default="true"),
-    claims=Depends(require_role(["admin"])),
+    claims=Depends(require_admin_action),
 ):
     """
     Upload competition data from an Excel file.
@@ -172,14 +172,14 @@ class CompetitionOfficialsPayload(BaseModel):
 
 
 @router.get("/competition_officials")
-async def get_competition_officials(claims=Depends(require_role(["admin"]))):
+async def get_competition_officials(claims=Depends(require_admin_action)):
     """Return persisted global officials (admin-only)."""
     return {"status": "ok", **live_module.get_competition_officials()}
 
 
 @router.post("/competition_officials")
 async def set_competition_officials(
-    payload: CompetitionOfficialsPayload, claims=Depends(require_role(["admin"]))
+    payload: CompetitionOfficialsPayload, claims=Depends(require_admin_action)
 ):
     """Persist global officials (admin-only)."""
     officials = live_module.set_competition_officials(

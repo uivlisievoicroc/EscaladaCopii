@@ -81,14 +81,15 @@ def test_admin_endpoint_requires_auth_when_ip_untrusted(client: TestClient):
 def test_cmd_trusted_admin_ip_allowed_without_token(client: TestClient, monkeypatch):
     monkeypatch.setenv("ADMIN_TRUSTED_IPS", "testclient")
     res = client.post("/api/cmd", json={"boxId": 1, "type": "INIT_ROUTE", "holdsCount": 5})
-    assert res.status_code == 200
-    assert res.json()["status"] == "ok"
+    assert res.status_code == 401
+    assert res.json()["detail"]["code"] == "ADMIN_SESSION_REQUIRED"
 
 
 def test_admin_endpoint_trusted_admin_ip_allowed_without_token(client: TestClient, monkeypatch):
     monkeypatch.setenv("ADMIN_TRUSTED_IPS", "testclient")
     res = client.get("/api/admin/audit/events")
-    assert res.status_code == 200
+    assert res.status_code == 401
+    assert res.json()["detail"]["code"] == "ADMIN_SESSION_REQUIRED"
 
 
 def test_cmd_forbidden_box(client: TestClient):

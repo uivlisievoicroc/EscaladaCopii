@@ -16,6 +16,7 @@ Claims shape (see `escalada.auth.service.create_access_token`):
 
 # -------------------- Standard library imports --------------------
 import os
+import re
 from typing import Any, Dict, Iterable, Optional
 
 # -------------------- Third-party imports --------------------
@@ -24,6 +25,7 @@ from fastapi.security import OAuth2PasswordBearer
 
 # -------------------- Local application imports --------------------
 from escalada.auth.service import decode_token
+from escalada.security import admin_session, license_events, usb_license
 
 # Cookie name must match auth.py
 COOKIE_NAME = "escalada_token"
@@ -33,6 +35,23 @@ DEFAULT_ADMIN_TRUSTED_IPS = frozenset({"127.0.0.1", "::1", "localhost"})
 # We set `auto_error=False` so cookie auth can be used as a fallback without FastAPI
 # raising a 401 before our custom logic runs.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+ADMIN_MUTATING_COMMAND_TYPES = {
+    "START_TIMER",
+    "STOP_TIMER",
+    "RESUME_TIMER",
+    "PROGRESS_UPDATE",
+    "SUBMIT_SCORE",
+    "INIT_ROUTE",
+    "SET_TIMER_PRESET",
+    "SET_TIME_CRITERION",
+    "SET_TIME_TIEBREAK_DECISION",
+    "SET_PREV_ROUNDS_TIEBREAK_DECISION",
+    "REGISTER_TIME",
+    "TIMER_SYNC",
+    "RESET_BOX",
+    "RESET_PARTIAL",
+    "ACTIVE_CLIMBER",
+}
 
 
 def _parse_admin_trusted_ips(raw: str | None) -> set[str]:
@@ -62,23 +81,35 @@ def _parse_box_id(value: Any) -> int | None:
         return None
 
 
+_JWT_LIKE_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+
+
+def _looks_like_jwt(token: str | None) -> bool:
+    normalized = (token or "").strip()
+    if not normalized:
+        return False
+    return bool(_JWT_LIKE_RE.match(normalized))
+
+
 async def get_token_from_request(
     request: Request,
     header_token: Optional[str] = Depends(oauth2_scheme),
 ) -> Optional[str]:
     """
     Extract JWT token from:
-    1. Authorization header (Bearer token) - for backwards compatibility
-    2. httpOnly cookie - preferred for XSS protection
+    1. httpOnly cookie - preferred for XSS protection
+    2. Authorization header (Bearer token) - backwards compatibility
     """
-    # Try Authorization header first (backwards compatible)
-    if header_token:
-        return header_token
-
-    # Fallback to httpOnly cookie
+    # Prefer cookie auth so Authorization can carry USB admin session tokens.
     cookie_token = request.cookies.get(COOKIE_NAME)
     if cookie_token:
         return cookie_token
+
+    # Backwards compatible fallback to Authorization bearer JWT.
+    # Note: Admin USB sessions also use `Authorization: Bearer ...`. Only treat it as a JWT when
+    # it matches the expected 3-part JWT shape; otherwise allow trusted-IP admin to kick in.
+    if header_token and _looks_like_jwt(header_token):
+        return header_token
 
     return None
 
@@ -125,6 +156,70 @@ def require_role(allowed: Iterable[str]):
         return claims
 
     return checker
+
+
+def _extract_bearer_token(authorization_header: str | None) -> str | None:
+    if not authorization_header:
+        return None
+    prefix = "Bearer "
+    if not authorization_header.startswith(prefix):
+        return None
+    token = authorization_header[len(prefix):].strip()
+    return token or None
+
+
+async def _enforce_admin_usb_security(request: Request) -> None:
+    usb_token = _extract_bearer_token(request.headers.get("Authorization"))
+    if not usb_token or not await admin_session.is_token_valid(usb_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "ADMIN_SESSION_REQUIRED",
+                "reason": "invalid_or_missing_admin_session",
+            },
+        )
+
+    license_status = usb_license.check_license()
+    if not license_status.get("valid"):
+        was_locked = await admin_session.lock()
+        if was_locked:
+            await license_events.publish(
+                "admin_locked",
+                {
+                    "reason": "license_invalid",
+                    "license_reason": license_status.get("reason"),
+                },
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "LICENSE_REQUIRED",
+                "reason": license_status.get("reason"),
+            },
+        )
+
+
+async def require_admin_action(
+    request: Request,
+    claims: Dict[str, Any] = Depends(require_role(["admin"])),
+) -> Dict[str, Any]:
+    """Require admin RBAC plus USB admin session + valid license."""
+    await _enforce_admin_usb_security(request)
+    return claims
+
+
+async def require_admin_command_action(
+    request: Request,
+    claims: Dict[str, Any],
+    command_type: str | None,
+) -> None:
+    """Require USB lock only for admin mutating /api/cmd calls."""
+    if claims.get("role") != "admin":
+        return
+    normalized_type = (command_type or "").strip().upper()
+    if normalized_type not in ADMIN_MUTATING_COMMAND_TYPES:
+        return
+    await _enforce_admin_usb_security(request)
 
 
 async def require_box_access(

@@ -40,6 +40,57 @@ Admin endpoints no longer use username/password login.
 
 Do not expose the API publicly without network protections (reverse proxy allowlists, VPN, firewall), because trusted IPs bypass admin login.
 
+## USB admin security (Lock/Unlock)
+
+Admin actions now require a second local factor (USB key) in addition to existing RBAC/JWT checks.
+
+- `USB_LICENSE_SECRET` (required for valid USB checks)
+  - If missing, backend still starts, but license status is reported as `misconfigured` and admin USB unlock cannot succeed.
+- `USB_WATCHDOG_INTERVAL_SEC` (optional, default `5`)
+  - Background watchdog interval for auto-lock when USB license becomes invalid.
+
+### New endpoints
+
+- `GET /api/license/status`
+  - Returns `license_valid`, `license_reason`, `admin_unlocked` (and non-sensitive metadata).
+- `POST /api/admin/unlock`
+  - Requires admin RBAC.
+  - Validates USB license and issues an in-memory USB admin session token.
+  - Returns `403` with `{"code":"LICENSE_REQUIRED"}` when USB is missing/invalid.
+- `POST /api/admin/lock`
+  - Requires admin RBAC.
+  - Revokes the USB admin session token immediately.
+- `GET /api/license/events` (SSE)
+  - Emits `license_status_changed` and `admin_locked`.
+
+### Enforcement model
+
+- All `/api/admin/*` routes require:
+  - admin RBAC, and
+  - valid USB admin session token in `Authorization: Bearer <usb_admin_token>`, and
+  - currently valid USB license.
+- `POST /api/save_ranking` also requires USB admin lock.
+- `POST /api/cmd` enforces USB admin lock only for admin callers and mutating command types; judge flow remains unaffected.
+- If USB is removed while unlocked, watchdog auto-locks in at most `USB_WATCHDOG_INTERVAL_SEC`.
+
+### Provisioning `competition.key` on USB
+
+Use the provisioning script to generate/write the root file expected by the validator:
+
+```bash
+# Set USB_LICENSE_SECRET either via `.env` (recommended) or environment.
+# (The script loads `.env` automatically if present.)
+# export USB_LICENSE_SECRET='replace-with-strong-secret'
+poetry run python tools/provision_usb_key.py <mountpoint>
+```
+
+Examples:
+- macOS: `<mountpoint>` like `/Volumes/MY_USB`
+- Linux: `<mountpoint>` like `/media/<user>/MY_USB` or `/run/media/<user>/MY_USB`
+- Windows: `<mountpoint>` like `E:\\`
+
+The script writes `<mountpoint>/competition.key` and asks for confirmation before overwrite (or pass `--force`).
+
 ## Tests
 
 ```bash
