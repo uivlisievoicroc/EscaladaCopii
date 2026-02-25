@@ -7,10 +7,14 @@ from PyInstaller.utils.hooks import collect_submodules
 
 BINARY_NAME = "EscaladaServer"
 
-ORCH_ROOT = Path(__file__).resolve().parents[1]
-API_DIR = Path(os.environ.get("ESCALADA_API_DIR", ORCH_ROOT / "repos" / "escalada-api")).resolve()
+# NOTE: PyInstaller does not guarantee `__file__` is set when executing the spec.
+# Use an explicit env var (set by build scripts) and fall back to current working directory.
+API_DIR = Path(os.environ.get("ESCALADA_API_DIR", os.getcwd())).resolve()
 MODE = os.environ.get("ESCALADA_PYI_MODE", "onedir").strip().lower()
 ONEFILE = MODE == "onefile"
+
+if not (API_DIR / "escalada").exists():
+    raise SystemExit(f"ESCALADA_API_DIR does not look like escalada-api: {API_DIR}")
 
 frontend_index = API_DIR / "frontend_dist" / "index.html"
 if not frontend_index.exists():
