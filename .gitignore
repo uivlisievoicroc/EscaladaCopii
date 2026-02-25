@@ -21,6 +21,9 @@ dist/
 build/
 *.egg-info/
 
+# Frontend bundle copied for packaging
+frontend_dist/
+
 # Editor artifacts
 .vscode/
 .idea/

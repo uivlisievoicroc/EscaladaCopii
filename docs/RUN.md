@@ -49,6 +49,14 @@ Action:
 - USB key **is required for admin-protected mutating actions** (unlock flow).
 - Judge/public read-only usage remains available without USB unlock.
 
+### USB secret (required for validation)
+Packaged runs must have `USB_LICENSE_SECRET` available so the server can validate `competition.key` on the stick.
+
+Recommended (persistent, no terminal export): create a 1-line file in app-data:
+- macOS: `~/Library/Application Support/EscaladaServer/secrets/usb_license_secret.txt`
+- Windows: `%APPDATA%\\EscaladaServer\\secrets\\usb_license_secret.txt`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/EscaladaServer/secrets/usb_license_secret.txt`
+
 ## 5) QR workflow
 From Control Panel:
 1. Generate judge QR links for each box.

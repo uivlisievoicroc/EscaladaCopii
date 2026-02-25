@@ -44,6 +44,53 @@ def _build_status(valid: bool, reason: str, mountpoint: str | None) -> LicenseSt
     }
 
 
+def _load_usb_secret_from_file() -> str:
+    """
+    Load the USB license secret from a persistent file.
+
+    This is meant for packaged runs where shell environment variables are not convenient.
+    The env var `USB_LICENSE_SECRET` always takes precedence when set.
+    """
+
+    candidates: list[Path] = []
+    env_dir = (os.getenv("ESCALADA_SECRETS_DIR") or "").strip()
+    if env_dir:
+        candidates.append(Path(env_dir))
+
+    # Best-effort default location (avoid importing runtime_paths to keep this module lightweight).
+    home = Path.home()
+    if sys.platform.startswith("win"):
+        base = Path(os.getenv("APPDATA") or (home / "AppData" / "Roaming"))
+        candidates.append(base / "EscaladaServer" / "secrets")
+    elif sys.platform == "darwin":
+        candidates.append(home / "Library" / "Application Support" / "EscaladaServer" / "secrets")
+    else:
+        base = Path(os.getenv("XDG_DATA_HOME") or (home / ".local" / "share"))
+        candidates.append(base / "EscaladaServer" / "secrets")
+
+    for secrets_dir in candidates:
+        try:
+            secret_path = secrets_dir / "usb_license_secret.txt"
+            secret = secret_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if secret:
+            return secret
+
+    return ""
+
+
+def _get_usb_license_secret() -> str:
+    secret = (os.getenv("USB_LICENSE_SECRET") or "").strip()
+    if secret:
+        return secret
+
+    secret = _load_usb_secret_from_file()
+    if secret:
+        os.environ["USB_LICENSE_SECRET"] = secret
+    return secret
+
+
 def _js_like_round(value: float) -> int:
     return int(value + 0.5)
 
@@ -95,7 +142,7 @@ def _is_candidate_partition(partition) -> bool:
 
 
 def _scan_license() -> LicenseStatus:
-    secret = (os.getenv("USB_LICENSE_SECRET") or "").strip()
+    secret = _get_usb_license_secret()
     if not secret:
         return _build_status(False, "misconfigured", None)
 
@@ -163,4 +210,3 @@ def check_license(force_refresh: bool = False) -> LicenseStatus:
         _cached_result = result
         _cached_at_monotonic = monotonic()
     return dict(result)
-
