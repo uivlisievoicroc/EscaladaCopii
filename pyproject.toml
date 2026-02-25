@@ -21,6 +21,9 @@ dependencies = [
     "python-dotenv (>=1.0.1,<2.0.0)"
 ]
 
+[project.scripts]
+escalada-server = "escalada.launcher:main"
+
 [tool.poetry]
 packages = [{ include = "escalada" }]
 

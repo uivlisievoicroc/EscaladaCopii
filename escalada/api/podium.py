@@ -19,7 +19,8 @@ async def get_podium(category: str):
     if not safe_category or safe_category != category:
         raise HTTPException(status_code=400, detail="Invalid category name")
 
-    excel_path = Path("escalada/clasamente") / safe_category / "overall.xlsx"
+    exports_root = Path(os.getenv("ESCALADA_EXPORTS_DIR", "escalada/clasamente"))
+    excel_path = exports_root / safe_category / "overall.xlsx"
     if not excel_path.exists():
         raise HTTPException(
             status_code=404, detail="Clasament inexistent pentru categoria specificată."

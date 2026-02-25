@@ -80,6 +80,14 @@ async def get_public_officials() -> PublicCompetitionOfficialsResponse:
     )
 
 
+@router.get("/snapshot")
+async def get_public_snapshot() -> dict:
+    """Return a read-only public snapshot payload for internet mirror/static export."""
+    from escalada.api.live import _build_public_snapshot_payload
+
+    return await _build_public_snapshot_payload()
+
+
 # Per-box public spectators channel registry.
 public_box_channels: Dict[int, set[WebSocket]] = {}
 public_box_channels_lock = asyncio.Lock()

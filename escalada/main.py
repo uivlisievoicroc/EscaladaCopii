@@ -18,8 +18,10 @@ from time import time
 
 # -------------------- Third-party imports --------------------
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 # -------------------- Local application imports --------------------
 from escalada.api import live as live_module
@@ -36,13 +38,22 @@ from escalada.api.save_ranking import router as save_ranking_router
 from escalada.security import admin_session, license_events, usb_license
 from escalada.routers.upload import router as upload_router
 from escalada.rate_limit import cleanup_rate_limit_data
+from escalada import runtime_paths, runtime_state
 
 # -------------------- Logging --------------------
 # Log to stdout (for containers/terminal) and also to a local file (useful on event day).
+_log_file_path = Path(os.getenv("ESCALADA_LOG_FILE", "escalada.log"))
+_log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+try:
+    _log_file_path.parent.mkdir(parents=True, exist_ok=True)
+    _log_handlers.append(logging.FileHandler(_log_file_path))
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("escalada.log")],
+    handlers=_log_handlers,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +96,12 @@ BACKUP_RETENTION_FILES = int(os.getenv("BACKUP_RETENTION_FILES", "20"))
 BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")
 RATE_LIMIT_CLEANUP_INTERVAL_MIN = int(os.getenv("RATE_LIMIT_CLEANUP_INTERVAL_MIN", "5"))
 USB_WATCHDOG_INTERVAL_SEC = int(os.getenv("USB_WATCHDOG_INTERVAL_SEC", "5"))
+FRONTEND_DIST_DIR = runtime_paths.resolve_frontend_dist_dir()
+FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+
+SPA_EXACT_EXCLUDES = {"/docs", "/redoc", "/openapi.json"}
+SPA_PREFIX_EXCLUDES = ("/api", "/assets", "/docs", "/redoc")
 
 # References to asyncio Tasks so we can cancel them cleanly on shutdown.
 backup_task: asyncio.Task | None = None
@@ -94,6 +111,28 @@ usb_watchdog_task: asyncio.Task | None = None
 
 async def run_migrations() -> None:
     """Backward-compatible no-op (Postgres/Alembic removed)."""
+    return None
+
+
+def _is_spa_excluded(path: str) -> bool:
+    normalized = path if path.startswith("/") else f"/{path}"
+    if normalized in SPA_EXACT_EXCLUDES:
+        return True
+    return any(
+        normalized == prefix or normalized.startswith(f"{prefix}/")
+        for prefix in SPA_PREFIX_EXCLUDES
+    )
+
+
+def _resolve_frontend_file(path: str) -> Path | None:
+    if not path:
+        return None
+    candidate = (FRONTEND_DIST_DIR / path).resolve()
+    frontend_root = FRONTEND_DIST_DIR.resolve()
+    if frontend_root not in candidate.parents:
+        return None
+    if candidate.is_file():
+        return candidate
     return None
 
 
@@ -255,6 +294,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+if FRONTEND_ASSETS_DIR.exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(FRONTEND_ASSETS_DIR)),
+        name="frontend-assets",
+    )
+
 
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -310,6 +356,29 @@ async def status_summary():
     }
 
 
+@app.get("/api/runtime")
+async def runtime_info(request: Request):
+    state = runtime_state.get_runtime()
+    selected_port = state.get("port") or request.url.port or int(
+        os.getenv("ESCALADA_RUNTIME_PORT", "8000")
+    )
+    bind_host = state.get("host") or os.getenv("ESCALADA_RUNTIME_HOST", "0.0.0.0")
+    request_host = request.headers.get("host", "")
+    base_url = state.get("base_url")
+    if not base_url:
+        if request_host:
+            base_url = f"{request.url.scheme}://{request_host}"
+        else:
+            base_url = f"{request.url.scheme}://{bind_host}:{selected_port}"
+
+    return {
+        "host": bind_host,
+        "port": int(selected_port),
+        "base_url": base_url,
+        "paths": runtime_paths.describe_runtime_paths(),
+    }
+
+
 # -------------------- Router registration --------------------
 # Public/API routers
 app.include_router(upload_router, prefix="/api")
@@ -325,3 +394,26 @@ app.include_router(license_router, prefix="/api")
 app.include_router(backup_router, prefix="/api/admin")
 app.include_router(audit_router, prefix="/api/admin")
 app.include_router(ops_router, prefix="/api/admin")
+
+
+@app.get("/", include_in_schema=False)
+async def spa_root():
+    if FRONTEND_INDEX_FILE.exists():
+        return FileResponse(FRONTEND_INDEX_FILE)
+    raise HTTPException(status_code=404, detail="frontend_not_built")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_fallback(full_path: str):
+    request_path = f"/{full_path.lstrip('/')}" if full_path else "/"
+    if _is_spa_excluded(request_path):
+        raise HTTPException(status_code=404, detail="not_found")
+
+    maybe_file = _resolve_frontend_file(full_path)
+    if maybe_file:
+        return FileResponse(maybe_file)
+
+    if FRONTEND_INDEX_FILE.exists():
+        return FileResponse(FRONTEND_INDEX_FILE)
+
+    raise HTTPException(status_code=404, detail="frontend_not_built")

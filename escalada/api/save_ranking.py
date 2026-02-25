@@ -16,6 +16,7 @@ Important:
 
 # -------------------- Standard library imports --------------------
 import math
+import os
 from pathlib import Path
 
 # -------------------- Third-party imports --------------------
@@ -39,7 +40,7 @@ router = APIRouter()
 
 def _safe_category_dir(category: str) -> Path:
     """
-    Build a safe category directory under `escalada/clasamente`.
+    Build a safe category directory under configured exports root.
     Preserves diacritics/spaces, but blocks path traversal and separators.
     """
     cat = (category or "").strip()
@@ -48,7 +49,7 @@ def _safe_category_dir(category: str) -> Path:
     if "/" in cat or "\\" in cat or ".." in cat:
         raise HTTPException(status_code=400, detail="invalid_categorie")
 
-    base_dir = Path("escalada/clasamente").resolve()
+    base_dir = Path(os.getenv("ESCALADA_EXPORTS_DIR", "escalada/clasamente")).resolve()
     candidate = (base_dir / cat).resolve()
     if base_dir not in candidate.parents:
         raise HTTPException(status_code=400, detail="invalid_categorie")
@@ -94,7 +95,7 @@ def save_ranking(payload: RankingIn, claims=Depends(require_admin_action)):
     Persist category rankings to disk (XLSX + PDF).
 
     Output path:
-      `escalada/clasamente/<categorie>/`
+      `<ESCALADA_EXPORTS_DIR>/<categorie>/`
 
     Files:
     - overall.xlsx / overall.pdf: overall ranking across routes (geometric mean of rank-points)
