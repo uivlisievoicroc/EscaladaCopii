@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
 import escalada.api.live as live
 from escalada.auth.service import create_access_token
 from escalada.main import app
+from escalada.security import usb_license
 
 
 @pytest.fixture(autouse=True)
@@ -50,18 +53,31 @@ def client():
     return TestClient(app)
 
 
-def _admin_headers() -> dict[str, str]:
-    token = create_access_token(
+def _valid_license_status() -> dict:
+    return {
+        "valid": True,
+        "reason": "ok",
+        "mountpoint": "/media/test-usb",
+        "checked_at": datetime.now(timezone.utc),
+    }
+
+
+def _unlock_admin_headers(client: TestClient, monkeypatch) -> dict[str, str]:
+    monkeypatch.setattr(usb_license, "check_license", lambda force_refresh=False: _valid_license_status())
+    admin_jwt = create_access_token(
         username="admin",
         role="admin",
         assigned_boxes=[],
         expires_minutes=60,
     )
-    return {"Authorization": f"Bearer {token}"}
+    client.cookies.set("escalada_token", admin_jwt)
+    unlock_res = client.post("/api/admin/unlock")
+    assert unlock_res.status_code == 200
+    usb_token = unlock_res.json()["token"]
+    return {"Authorization": f"Bearer {usb_token}"}
 
 
-def _init_and_submit(client: TestClient, *, box_id: int = 0) -> None:
-    headers = _admin_headers()
+def _init_and_submit(client: TestClient, headers: dict[str, str], *, box_id: int = 0) -> None:
     init_payload = {
         "boxId": box_id,
         "type": "INIT_ROUTE",
@@ -89,8 +105,11 @@ def _init_and_submit(client: TestClient, *, box_id: int = 0) -> None:
     assert submit_res.json().get("status") == "ok"
 
 
-def test_public_rankings_contains_lead_ranking_rows_after_submit_score(client: TestClient):
-    _init_and_submit(client, box_id=0)
+def test_public_rankings_contains_lead_ranking_rows_after_submit_score(
+    client: TestClient, monkeypatch
+):
+    headers = _unlock_admin_headers(client, monkeypatch)
+    _init_and_submit(client, headers, box_id=0)
 
     res = client.get("/api/public/rankings")
     assert res.status_code == 200
@@ -106,8 +125,8 @@ def test_public_rankings_contains_lead_ranking_rows_after_submit_score(client: T
     assert "leadRankingErrors" in box
 
 
-def test_public_ws_box_ranking_update_includes_lead_ranking_rows(client: TestClient):
-    headers = _admin_headers()
+def test_public_ws_box_ranking_update_includes_lead_ranking_rows(client: TestClient, monkeypatch):
+    headers = _unlock_admin_headers(client, monkeypatch)
     box_id = 1
 
     init_payload = {

@@ -308,6 +308,7 @@ def build_snapshot(
         "timesByName": times_by_name,
         "timerPreset": state.get("timerPreset"),
         "timerPresetSec": state.get("timerPresetSec"),
+        "federalOfficial": officials.get("federalOfficial", ""),
         "judgeChief": officials.get("judgeChief", ""),
         "competitionDirector": officials.get("competitionDirector", ""),
         "chiefRoutesetter": officials.get("chiefRoutesetter", ""),

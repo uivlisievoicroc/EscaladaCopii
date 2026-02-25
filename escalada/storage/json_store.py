@@ -173,32 +173,55 @@ def load_box_states() -> Dict[int, dict]:
 
 
 def load_competition_officials() -> dict[str, str]:
-    """Load global competition officials (judge chief + competition director + chief routesetter)."""
+    """Load global competition officials (federal official + judge chief + director + chief routesetter)."""
     ensure_storage_dirs()
     path = _competition_officials_path()
     if not path.exists():
-        return {"judgeChief": "", "competitionDirector": "", "chiefRoutesetter": ""}
+        return {
+            "federalOfficial": "",
+            "judgeChief": "",
+            "competitionDirector": "",
+            "chiefRoutesetter": "",
+        }
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.error("Failed to load competition officials: %s", exc)
-        return {"judgeChief": "", "competitionDirector": "", "chiefRoutesetter": ""}
+        return {
+            "federalOfficial": "",
+            "judgeChief": "",
+            "competitionDirector": "",
+            "chiefRoutesetter": "",
+        }
     if not isinstance(data, dict):
-        return {"judgeChief": "", "competitionDirector": "", "chiefRoutesetter": ""}
+        return {
+            "federalOfficial": "",
+            "judgeChief": "",
+            "competitionDirector": "",
+            "chiefRoutesetter": "",
+        }
+    federal_official = data.get("federalOfficial")
     judge = data.get("judgeChief")
     director = data.get("competitionDirector")
     chief_routesetter = data.get("chiefRoutesetter")
     return {
+        "federalOfficial": federal_official.strip() if isinstance(federal_official, str) else "",
         "judgeChief": judge.strip() if isinstance(judge, str) else "",
         "competitionDirector": director.strip() if isinstance(director, str) else "",
         "chiefRoutesetter": chief_routesetter.strip() if isinstance(chief_routesetter, str) else "",
     }
 
 
-def save_competition_officials(judge_chief: str, competition_director: str, chief_routesetter: str) -> None:
+def save_competition_officials(
+    federal_official: str,
+    judge_chief: str,
+    competition_director: str,
+    chief_routesetter: str,
+) -> None:
     """Persist global competition officials (JSON-only)."""
     ensure_storage_dirs()
     payload = {
+        "federalOfficial": (federal_official or "").strip(),
         "judgeChief": (judge_chief or "").strip(),
         "competitionDirector": (competition_director or "").strip(),
         "chiefRoutesetter": (chief_routesetter or "").strip(),

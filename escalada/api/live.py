@@ -91,7 +91,12 @@ public_channels_lock = asyncio.Lock()
 # - Tests may disable it for backwards compatibility / focused unit scenarios
 VALIDATION_ENABLED = True
 # Global competition officials (not box-specific). Loaded at startup and included in snapshots.
-competition_officials: dict[str, str] = {"judgeChief": "", "competitionDirector": "", "chiefRoutesetter": ""}
+competition_officials: dict[str, str] = {
+    "federalOfficial": "",
+    "judgeChief": "",
+    "competitionDirector": "",
+    "chiefRoutesetter": "",
+}
 
 
 def get_competition_officials() -> dict[str, str]:
@@ -100,22 +105,28 @@ def get_competition_officials() -> dict[str, str]:
 
 
 def set_competition_officials(
-    *, judge_chief: str, competition_director: str, chief_routesetter: str
+    *,
+    federal_official: str,
+    judge_chief: str,
+    competition_director: str,
+    chief_routesetter: str,
 ) -> dict[str, str]:
     """
-    Update global officials (judge chief + director + chief routesetter).
+    Update global officials (federal official + judge chief + director + chief routesetter).
 
     This is global to the entire event (not per-box/per-route) and is persisted to JSON so
     ContestPage/Public views can show it consistently even after restarts.
     """
     global competition_officials
     competition_officials = {
+        "federalOfficial": (federal_official or "").strip(),
         "judgeChief": (judge_chief or "").strip(),
         "competitionDirector": (competition_director or "").strip(),
         "chiefRoutesetter": (chief_routesetter or "").strip(),
     }
     try:
         save_competition_officials(
+            competition_officials["federalOfficial"],
             competition_officials["judgeChief"],
             competition_officials["competitionDirector"],
             competition_officials["chiefRoutesetter"],

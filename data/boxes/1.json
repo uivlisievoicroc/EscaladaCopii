@@ -1,36 +1,40 @@
 {
   "initiated": true,
-  "holdsCount": 32,
+  "holdsCount": 21,
   "currentClimber": "",
   "preparingClimber": "",
   "started": false,
   "timerState": "idle",
   "holdCount": 0.0,
-  "routeIndex": 3,
-  "routesCount": 3,
+  "routeIndex": 2,
+  "routesCount": 2,
   "holdsCounts": [
-    21,
-    22,
-    32
+    12,
+    21
   ],
   "competitors": [
     {
-      "nume": "Ghiurka Éva",
+      "nume": "Cireap Paul",
       "marked": true,
-      "club": "6C Plus"
+      "club": "One Move"
     },
     {
-      "nume": "Chiorean Evelin",
+      "nume": "Leonte Matei",
       "marked": true,
-      "club": "CS LINX CLUB"
+      "club": "A.C Repedea"
     },
     {
-      "nume": "Nechifor Ema",
+      "nume": "Alexandru Radu",
       "marked": true,
-      "club": "ACS Adrenalin"
+      "club": "Știința Politehnica"
+    },
+    {
+      "nume": "Nicolici Radu",
+      "marked": true,
+      "club": "One Move"
     }
   ],
-  "categorie": "zac",
+  "categorie": "a",
   "lastRegisteredTime": null,
   "remaining": 300.0,
   "timerPreset": "05:00",
@@ -49,25 +53,26 @@
   "prevRoundsTiebreakOrders": {},
   "prevRoundsTiebreakRanks": {},
   "prevRoundsTiebreakLineageRanks": {},
-  "sessionId": "f6e91986-09bd-4837-b4d4-10eddf154736",
-  "boxVersion": 110,
+  "sessionId": "fb4a6a74-84b7-4abb-ad01-858acae9d168",
+  "boxVersion": 57,
   "leadTiebreakBadgesByName": {},
-  "leadTiebreakBadgesRouteIndex": 3,
+  "leadTiebreakBadgesRouteIndex": 2,
   "scores": {
-    "Ghiurka Éva": [
-      4.0,
-      9.0,
+    "Cireap Paul": [
+      5.0,
       4.0
     ],
-    "Chiorean Evelin": [
-      8.0,
-      14.0,
-      8.0
+    "Leonte Matei": [
+      1.0,
+      6.0
     ],
-    "Nechifor Ema": [
-      6.0,
-      5.0,
-      11.0
+    "Alexandru Radu": [
+      0.0,
+      5.0
+    ],
+    "Nicolici Radu": [
+      8.0,
+      2.0
     ]
   },
   "times": {}

@@ -3,7 +3,7 @@ Admin upload routes.
 
 This router currently provides:
 - `/api/admin/upload`: Parse an uploaded Excel listbox and return a listbox object for the UI
-- `/api/admin/competition_officials`: Get/set global officials (chief judge/director/chief routesetter)
+- `/api/admin/competition_officials`: Get/set global officials (federal official/chief judge/director/chief routesetter)
 
 Notes:
 - The upload endpoint is intentionally "stateless": it does not mutate live contest state directly.
@@ -166,6 +166,7 @@ async def upload_listbox(
 
 class CompetitionOfficialsPayload(BaseModel):
     """Payload for setting global officials (applies to the entire event, not per box)."""
+    federalOfficial: str = ""
     judgeChief: str = ""
     competitionDirector: str = ""
     chiefRoutesetter: str = ""
@@ -183,6 +184,7 @@ async def set_competition_officials(
 ):
     """Persist global officials (admin-only)."""
     officials = live_module.set_competition_officials(
+        federal_official=payload.federalOfficial,
         judge_chief=payload.judgeChief,
         competition_director=payload.competitionDirector,
         chief_routesetter=payload.chiefRoutesetter,

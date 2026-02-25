@@ -1,6 +1,8 @@
+import asyncio
 import json
 import time
 import unittest
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -10,6 +12,7 @@ from escalada.api.auth import router as auth_router
 from escalada.api.live import router as live_router
 from escalada.auth.service import create_access_token
 from escalada.rate_limit import get_rate_limiter
+from escalada.security import admin_session, usb_license
 
 
 def _build_test_app() -> FastAPI:
@@ -41,6 +44,15 @@ def _recv_until(ws, wanted: set[str], max_steps: int = 50) -> dict:
         if t in wanted:
             return payload
     raise AssertionError(f"Did not receive any of {wanted} within {max_steps} messages")
+
+
+def _valid_license_status() -> dict:
+    return {
+        "valid": True,
+        "reason": "ok",
+        "mountpoint": "/media/test-usb",
+        "checked_at": datetime.now(timezone.utc),
+    }
 
 
 class WebSocketFifteenBoxesAdminTest(unittest.TestCase):
@@ -83,18 +95,23 @@ class WebSocketFifteenBoxesAdminTest(unittest.TestCase):
             live_module.save_box_state = self._orig_save_box_state
         if getattr(self, "_orig_append_audit_event", None) is not None:
             live_module.append_audit_event = self._orig_append_audit_event
+        asyncio.run(admin_session.lock())
 
     def test_admin_can_drive_15_boxes_over_ws(self):
         app = _build_test_app()
         client = TestClient(app)
+        original_check_license = usb_license.check_license
+        usb_license.check_license = lambda force_refresh=False: _valid_license_status()
 
-        # Authenticate as admin via cookie (same mechanism as the UI).
-        token = create_access_token(username="Admin Test", role="admin", assigned_boxes=[])
-        client.cookies.set("escalada_token", token)
-
-        # Open 15 authenticated WS connections (one per box).
-        sockets = []
         try:
+            # Authenticate as admin via cookie and unlock USB-protected admin session.
+            token = create_access_token(username="Admin Test", role="admin", assigned_boxes=[])
+            client.cookies.set("escalada_token", token)
+            usb_token = asyncio.run(admin_session.unlock())
+            cmd_headers = {"Authorization": f"Bearer {usb_token}"}
+
+            # Open 15 authenticated WS connections (one per box).
+            sockets = []
             for box_id in range(1, 16):
                 ws_cm = client.websocket_connect(f"/api/ws/{box_id}")
                 ws = ws_cm.__enter__()
@@ -115,7 +132,7 @@ class WebSocketFifteenBoxesAdminTest(unittest.TestCase):
                     "timerPreset": "05:00",
                     "categorie": f"Cat_{box_id}",
                 }
-                r = client.post("/api/cmd", json=init_payload)
+                r = client.post("/api/cmd", json=init_payload, headers=cmd_headers)
                 self.assertEqual(r.status_code, 200)
 
                 ws = sockets[box_id - 1][1]
@@ -140,6 +157,7 @@ class WebSocketFifteenBoxesAdminTest(unittest.TestCase):
                         "sessionId": sid,
                         "boxVersion": box_versions[box_id],
                     },
+                    headers=cmd_headers,
                 )
                 self.assertEqual(r.status_code, 200)
 
@@ -160,6 +178,7 @@ class WebSocketFifteenBoxesAdminTest(unittest.TestCase):
                         "sessionId": session_ids[box_id],
                         "boxVersion": box_versions[box_id],
                     },
+                    headers=cmd_headers,
                 )
                 self.assertEqual(r.status_code, 200)
                 _ = _recv_until(ws, {"RESET_PARTIAL"})
@@ -173,8 +192,9 @@ class WebSocketFifteenBoxesAdminTest(unittest.TestCase):
                 box_versions[box_id] = int(snap.get("boxVersion") or box_versions[box_id])
 
         finally:
+            usb_license.check_license = original_check_license
             # Close sockets cleanly.
-            for ws_cm, ws in reversed(sockets):
+            for ws_cm, ws in reversed(locals().get("sockets", [])):
                 try:
                     ws_cm.__exit__(None, None, None)
                 except Exception:
