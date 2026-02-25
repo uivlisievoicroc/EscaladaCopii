@@ -195,8 +195,8 @@ def configure_runtime_environment(logger: logging.Logger) -> dict[str, str]:
 
     paths = ensure_runtime_dirs()
 
-    if not _is_truthy(os.getenv("ESCALADA_SKIP_LEGACY_MIGRATION")):
+    is_packaged = bool(getattr(sys, "_MEIPASS", None)) or bool(getattr(sys, "frozen", False))
+    if is_packaged and not _is_truthy(os.getenv("ESCALADA_SKIP_LEGACY_MIGRATION")):
         migrate_legacy_data(logger=logger, paths=paths)
 
     return paths
-

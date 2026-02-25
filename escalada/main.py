@@ -294,12 +294,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-if FRONTEND_ASSETS_DIR.exists():
-    app.mount(
-        "/assets",
-        StaticFiles(directory=str(FRONTEND_ASSETS_DIR)),
-        name="frontend-assets",
-    )
+app.mount(
+    "/assets",
+    StaticFiles(directory=str(FRONTEND_ASSETS_DIR), check_dir=False),
+    name="frontend-assets",
+)
 
 
 @app.middleware("http")
