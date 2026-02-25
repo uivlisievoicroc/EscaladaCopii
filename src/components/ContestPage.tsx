@@ -5,13 +5,11 @@
 // - WebSocket provides authoritative state (`STATE_SNAPSHOT` + command echoes)
 // - Local countdown provides smooth animation between server updates
 // - localStorage + postMessage act as fallback bridges between tabs (ControlPanel/JudgePage/ContestPage)
-import React, { useEffect, useState, useRef, useCallback, FC, ComponentType } from 'react';
+import React, { useEffect, useState, useRef, useCallback, FC } from 'react';
 import { useParams } from 'react-router-dom';
 import { debugLog, debugError, debugWarn } from '../utilis/debug';
 import { safeSetItem, safeGetItem, safeRemoveItem, safeGetJSON, storageKey } from '../utilis/storage';
 import { sanitizeBoxName, sanitizeCompetitorName, normalizeCompetitorKey } from '../utilis/sanitize';
-import { clearAuth, isAuthenticated, magicLogin } from '../utilis/auth';
-import LoginOverlay from './LoginOverlay';
 import type { Competitor, WebSocketMessage } from '../types';
 // (WebSocket logic moved into component)
 
@@ -77,14 +75,6 @@ type WindowMessage =
   | SubmitScoreMessage
   | ClimberRequestMessage
   | ClimberResponseMessage;
-
-interface LoginOverlayProps {
-  defaultUsername?: string;
-  title?: string;
-  onSuccess: () => void;
-}
-
-const TypedLoginOverlay = LoginOverlay as unknown as ComponentType<LoginOverlayProps>;
 
 // RouteProgress:
 // A decorative vertical progress rail built from golden-ratio segments, with a dot positioned by hold count.
@@ -187,46 +177,6 @@ const ContestPage: FC = () => {
   const { boxId: boxIdParam } = useParams<{ boxId: string }>();
   const boxId = boxIdParam!; // Route ensures this exists
 
-  // Viewer auth state (ContestPage is "read-only" but still gated by token/role/box access).
-  const [authActive, setAuthActive] = useState<boolean>(() => isAuthenticated());
-  const [showLogin, setShowLogin] = useState<boolean>(() => !isAuthenticated());
-
-  // Optional: support magic login via URL param (useful for kiosk displays)
-  useEffect(() => {
-    const readMagic = (): string | null => {
-      try {
-        const fromSearch = new URLSearchParams(window.location.search).get('magic');
-        if (fromSearch) return fromSearch;
-      } catch {
-        // ignore
-      }
-
-      // Hash router fallback: /#/contest/0?magic=...
-      try {
-        if (window.location.hash && window.location.hash.includes('?')) {
-          const [, qs] = window.location.hash.split('?');
-          return new URLSearchParams(qs).get('magic');
-        }
-      } catch {
-        // ignore
-      }
-      return null;
-    };
-
-    const magic = readMagic();
-    if (!magic) return;
-
-    (async () => {
-      try {
-        await magicLogin(magic);
-        setAuthActive(true);
-        setShowLogin(false);
-      } catch (err) {
-        debugError('[ContestPage] Magic login failed', err);
-      }
-    })();
-  }, []);
-
   // Read timer preset (per-box key wins over global key). Used for timer reset + progress bar total.
   const getTimerPreset = useCallback(() => {
     const specific = safeGetItem(`climbingTime-${boxId}`);
@@ -298,13 +248,7 @@ const ContestPage: FC = () => {
   });
   useEffect(() => {
     reconnectRef.current.shouldReconnect = true;
-
-    if (!authActive) {
-      return;
-    }
-
-    // Token is in httpOnly cookie; WebSocket handshake will include cookies automatically.
-    const url = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/ws/${boxId}`;
+    const url = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/public/ws/${boxId}`;
 
     // Handle WS payloads for this box.
     // - STATE_SNAPSHOT is authoritative and hydrates the full UI (safe to open mid-contest).
@@ -571,6 +515,9 @@ const ContestPage: FC = () => {
         if (typeof (msg as any).chiefRoutesetter === 'string') {
           setChiefRoutesetter((msg as any).chiefRoutesetter || '—');
         }
+        if (typeof (msg as any).federalOfficial === 'string') {
+          setFederalOfficial((msg as any).federalOfficial || '—');
+        }
       }
       // Mirror time-tiebreak flag changes (admin setup) into UI + localStorage.
       if (msg.type === 'SET_TIME_CRITERION') {
@@ -754,19 +701,6 @@ const ContestPage: FC = () => {
       ws.onclose = async (ev) => {
         if (!reconnectRef.current.shouldReconnect) return;
 
-        // Auth required or forbidden box/role: stop reconnect loop and prompt login.
-        if (ev?.code === 4401 || ev?.code === 4403) {
-          reconnectRef.current.shouldReconnect = false;
-          try {
-            await clearAuth();
-          } catch {
-            // ignore
-          }
-          setAuthActive(false);
-          setShowLogin(true);
-          return;
-        }
-
         const delay = Math.min(1000 * 2 ** reconnectRef.current.tries, 15000);
         reconnectRef.current.tries += 1;
         setTimeout(connect, delay);
@@ -812,7 +746,7 @@ const ContestPage: FC = () => {
         debugLog('[ContestPage cleanup] WebSocket close error (expected):', err);
       }
     };
-  }, [boxId, getTimerPreset, authActive]);
+  }, [boxId, getTimerPreset]);
 
   // -------------------- Contest flow state (queue + timer + rankings) --------------------
   // Queue model:
@@ -932,12 +866,17 @@ const ContestPage: FC = () => {
     () => safeGetItem('competitionChiefRoutesetter') || '—',
     [],
   );
+  const readFederalOfficial = useCallback(
+    () => safeGetItem('competitionFederalOfficial') || '—',
+    [],
+  );
 
   const [judgeChief, setJudgeChief] = useState<string>(() => readJudgeChief());
   const [competitionDirector, setCompetitionDirector] = useState<string>(() =>
     readCompetitionDirector(),
   );
   const [chiefRoutesetter, setChiefRoutesetter] = useState<string>(() => readChiefRoutesetter());
+  const [federalOfficial, setFederalOfficial] = useState<string>(() => readFederalOfficial());
 
   // Keep Route Info (routesetter + officials) in sync when ControlPanel updates localStorage.
   useEffect(() => {
@@ -967,6 +906,12 @@ const ContestPage: FC = () => {
       ) {
         setChiefRoutesetter(readChiefRoutesetter());
       }
+      if (
+        e.key === storageKey('competitionFederalOfficial') ||
+        e.key === 'competitionFederalOfficial'
+      ) {
+        setFederalOfficial(readFederalOfficial());
+      }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
@@ -977,6 +922,7 @@ const ContestPage: FC = () => {
     readJudgeChief,
     readCompetitionDirector,
     readChiefRoutesetter,
+    readFederalOfficial,
 	  ]);
 
   // Broadcast remaining time to:
@@ -1431,18 +1377,7 @@ const ContestPage: FC = () => {
   ]);
 
   return (
-    <>
-      {showLogin && (
-        <TypedLoginOverlay
-          defaultUsername="viewer"
-          title="Spectator Authentication"
-          onSuccess={() => {
-            setAuthActive(true);
-            setShowLogin(false);
-          }}
-        />
-      )}
-      <div className="h-screen overflow-hidden bg-gradient-to-br from-[#05060a] via-[#0b1220] to-[#0f172a] text-slate-100 flex flex-col">
+    <div className="h-screen overflow-hidden bg-gradient-to-br from-[#05060a] via-[#0b1220] to-[#0f172a] text-slate-100 flex flex-col">
       <header className="w-full px-6 py-2 flex items-center justify-center border-b border-white/10 flex-shrink-0">
         <h1 className="text-2xl md:text-3xl font-black text-white text-center">
           {sanitizeBoxName(category)}
@@ -1640,12 +1575,16 @@ const ContestPage: FC = () => {
                 <span className="text-white/60">Event Director:</span>
                 <span className="font-semibold text-white">{competitionDirector}</span>
               </div>
+              <div className="flex items-center gap-2 text-white/80">
+                <span className="h-1.5 w-1.5 rounded-full bg-sky-400/60" />
+                <span className="text-white/60">Federal Official:</span>
+                <span className="font-semibold text-white">{federalOfficial}</span>
+              </div>
             </div>
           </div>
         </section>
       </main>
-      </div>
-    </>
+    </div>
   );
 };
 

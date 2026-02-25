@@ -8,13 +8,12 @@
  * - Live WebSocket updates: Timer, climber changes, holds progress
  * - Client-side timer ticking: Smooth countdown between server snapshots (250ms intervals)
  * - Exponential backoff reconnection: Up to 10 attempts (1s, 2s, 4s, ..., 512s)
- * - Token refresh: Handles 4401 close code by clearing expired spectator JWT
  * - Dynamic timer color: Green (normal), yellow (<30s or paused), red (overtime)
  * - Progress visualization: Gradient bar showing holds completed / total holds
  *
  * **Architecture:**
  * - Route: `/public/live-climbing/:boxId`
- * - WebSocket: `/api/public/ws/{boxId}?token=...` (spectator JWT, 24h TTL)
+ * - WebSocket: `/api/public/ws/{boxId}`
  * - Messages: STATE_SNAPSHOT (full state), PING/PONG (heartbeat), REQUEST_STATE (manual refresh)
  * - Timer Engine: Calculates `displayRemaining = baseRemaining - elapsedSinceSnapshot` when running
  *   - Server sends `remaining` in STATE_SNAPSHOT, client interpolates between updates
@@ -31,7 +30,6 @@
  */
 import React, { FC, useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getSpectatorToken, clearSpectatorToken } from './PublicHub';
 import { backoffDelayMs, buildWsUrl, parseWsJson, replyPong } from '../utilis/wsClient';
 
 /**
@@ -41,9 +39,8 @@ import { backoffDelayMs, buildWsUrl, parseWsJson, replyPong } from '../utilis/ws
  * - https: → wss: (secure WebSocket)
  * - http: → ws: (plain WebSocket)
  *
- * Endpoint: `wss://{host}:8000/api/public/ws/{boxId}?token={spectatorJWT}`
+ * Endpoint: `wss://{host}:8000/api/public/ws/{boxId}`
  * - Backend: escalada-api/escalada/api/public.py router
- * - Auth: Spectator JWT with 24h TTL (from PublicHub)
  */
 const WS_BASE = buildWsUrl('/api/public/ws');
 
@@ -134,19 +131,17 @@ const PublicLiveClimbing: FC = () => {
   /**
    * Establish WebSocket Connection with Exponential Backoff
    *
-   * Connects to `/api/public/ws/{boxId}?token={spectatorJWT}` and sets up handlers.
+   * Connects to `/api/public/ws/{boxId}` and sets up handlers.
    * Uses `isConnectingRef` guard to prevent duplicate connection attempts.
    *
    * **Flow:**
-   * 1. Fetch spectator token (24h TTL JWT from PublicHub)
-   * 2. Close existing WebSocket if any
-   * 3. Create new WebSocket with token query param
-   * 4. Set up event handlers (onopen, onmessage, onerror, onclose)
+   * 1. Close existing WebSocket if any
+   * 2. Create new WebSocket
+   * 3. Set up event handlers (onopen, onmessage, onerror, onclose)
    *
    * **Reconnection Strategy:**
-   * - On close (network issue, server restart, token expiry), schedule reconnect
+   * - On close (network issue or server restart), schedule reconnect
    * - Exponential backoff: delay = 1000ms * 2^attempt (up to 10 attempts)
-   * - If code 4401 (token expired), clear cached token before retry
    * - After 10 failures, show error and stop (user must reload page)
    *
    * **Why useCallback?**
@@ -154,15 +149,13 @@ const PublicLiveClimbing: FC = () => {
    * - Depends on `boxId` and `reconnectAttempts` (recalculates when these change)
    * - Called from useEffect mount and onclose handler (needs stable reference)
    */
-  const connect = useCallback(async () => {
+  const connect = useCallback(() => {
     // Guard: Prevent duplicate connection attempts
     if (isConnectingRef.current || !boxId) return;
     isConnectingRef.current = true;
 
     try {
-      // Fetch spectator token (cached in localStorage, 24h TTL)
-      const token = await getSpectatorToken();
-      const url = `${WS_BASE}/${boxId}?token=${encodeURIComponent(token)}`;
+      const url = `${WS_BASE}/${boxId}`;
 
       // Close existing WebSocket if any (reconnection scenario)
       if (wsRef.current) {
@@ -264,13 +257,10 @@ const PublicLiveClimbing: FC = () => {
        * Triggered on:
        * - Network failure (after onerror)
        * - Server shutdown/restart
-       * - Token expiry (code 4401)
        * - Manual close (component unmount)
        *
        * **Reconnection Strategy:**
-       * 1. Check close code:
-       *    - 4401: Token expired → Clear cached token (forces fresh fetch on reconnect)
-       * 2. Check attempt count:
+       * 1. Check attempt count:
        *    - < 10: Schedule reconnect with exponential backoff
        *      - delay = 1000ms * 2^attempt (1s, 2s, 4s, 8s, ..., 512s)
        *      - Increment attempt counter
@@ -282,19 +272,10 @@ const PublicLiveClimbing: FC = () => {
        * - Gives network time to recover
        * - Avoids "thundering herd" problem
        *
-       * **Why clear token on 4401?**
-       * - Server explicitly rejected token (expired or invalid)
-       * - Fetching cached token again would fail the same way
-       * - Clearing forces getSpectatorToken() to fetch fresh JWT
        */
-      ws.onclose = (event) => {
+      ws.onclose = () => {
         setConnected(false);
         isConnectingRef.current = false;
-
-        // Handle token expiry: Clear cached token
-        if (event.code === 4401) {
-          clearSpectatorToken();
-        }
 
         // Attempt reconnect with exponential backoff (up to 10 attempts)
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
@@ -308,8 +289,8 @@ const PublicLiveClimbing: FC = () => {
         }
       };
     } catch (err) {
-      // Token fetch failed (network issue or PublicHub error)
-      setError('Could not obtain token');
+      // Failed to create or configure WebSocket.
+      setError('Could not connect');
       isConnectingRef.current = false;
     }
   }, [boxId, reconnectAttempts]);

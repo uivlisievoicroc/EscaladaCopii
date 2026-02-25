@@ -4,17 +4,16 @@ import { debugError } from '../utilis/debug';
 import styles from './ControlPanel.module.css';
 
 /**
- * LoginOverlay - Full-screen authentication modal for admin/judge/spectator login.
+ * LoginOverlay - Full-screen authentication modal for admin and judge login.
  * 
  * @component
  * @param {Function} onSuccess - Callback invoked after successful authentication (receives auth data)
- * @param {string} defaultUsername - Pre-filled username (e.g., "viewer" for spectators)
+ * @param {string} defaultUsername - Optional pre-filled username
  * @param {string} title - Modal title (default: "Authentication")
  * 
  * Usage contexts:
  * - ControlPanel: Admin authentication (title="Admin Authentication")
  * - JudgePage: Judge authentication
- * - ContestPage: Spectator authentication (title="Spectator Authentication", defaultUsername="viewer")
  * 
  * Authentication flow:
  * 1. User submits username + password
@@ -36,7 +35,7 @@ import styles from './ControlPanel.module.css';
  * - Loading state disables inputs and changes button text
  */
 const LoginOverlay = ({ onSuccess, defaultUsername = '', title = 'Authentication' }) => {
-  // Form state: username (pre-filled for spectators), password (always empty), error message, loading flag
+  // Form state: username (optionally pre-filled), password (always empty), error message, loading flag
   const [username, setUsername] = useState(defaultUsername);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -92,7 +91,7 @@ const LoginOverlay = ({ onSuccess, defaultUsername = '', title = 'Authentication
     <div className={styles.modalOverlay}>
       {/* Modal card with ARIA attributes for screen readers */}
       <div className={styles.modalCard} role="dialog" aria-modal="true">
-        {/* Header with customizable title (e.g., "Admin Authentication", "Spectator Authentication") */}
+        {/* Header with customizable title (e.g., "Admin Authentication") */}
         <div className={styles.modalHeader}>
           <div>
             <div className={styles.modalTitle}>{title}</div>
@@ -105,7 +104,7 @@ const LoginOverlay = ({ onSuccess, defaultUsername = '', title = 'Authentication
         )}
 
         <form onSubmit={handleSubmit} className={styles.modalContent}>
-          {/* Username field: pre-filled for spectators ("viewer"), empty for admin/judge */}
+          {/* Username field */}
           <div className={styles.modalField}>
             <label className={styles.modalLabel} htmlFor="login-username">
               User
@@ -135,7 +134,7 @@ const LoginOverlay = ({ onSuccess, defaultUsername = '', title = 'Authentication
               onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="current-password" // Enables password managers to recognize password field
-              autoFocus={!!defaultUsername} // Focus on password if username pre-filled (spectator flow)
+              autoFocus={!!defaultUsername} // Focus on password if username pre-filled
               disabled={loading} // Disable during submission
               className={styles.modalInput}
             />

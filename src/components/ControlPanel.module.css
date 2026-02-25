@@ -139,6 +139,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 
 .timerDisplay {
@@ -148,6 +150,32 @@
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.5px;
   text-shadow: 0 0 10px rgba(0, 217, 255, 0.3);
+}
+
+.timeCriterionBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-xl);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.timeCriterionBadgeOff {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  opacity: 0.75;
+}
+
+.timeCriterionBadgeOn {
+  background: rgba(255, 184, 0, 0.12);
+  border: 1px solid rgba(255, 184, 0, 0.35);
+  color: var(--accent-warning);
+  box-shadow: 0 0 12px rgba(255, 184, 0, 0.18);
 }
 
 /* Competitors List */
@@ -499,6 +527,12 @@
   background: rgba(0, 255, 136, 0.1);
   border: 1px solid rgba(0, 255, 136, 0.3);
   color: var(--accent-success);
+}
+
+.modalAlertWarning {
+  background: rgba(255, 184, 0, 0.1);
+  border: 1px solid rgba(255, 184, 0, 0.3);
+  color: var(--text-primary);
 }
 
 .modalAlertError {

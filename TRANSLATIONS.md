@@ -26,20 +26,12 @@
 |----------|---------|---------|
 | `Autentificare admin` | `Admin Authentication` | Login overlay title |
 
-### 3. ContestPage.tsx
-**Location**: `src/components/ContestPage.tsx`
-
-| Romanian | English | Context |
-|----------|---------|---------|
-| `Autentificare spectator` | `Spectator Authentication` | Login overlay title |
-
-### 4. PublicLiveClimbing.tsx
+### 3. PublicLiveClimbing.tsx
 **Location**: `src/components/PublicLiveClimbing.tsx`
 
 | Romanian | English | Context |
 |----------|---------|---------|
 | `Conexiunea a eșuat. Reîncarcă pagina.` | `Connection failed. Reload the page.` | Connection error |
-| `Nu s-a putut obține token-ul` | `Could not obtain token` | Token fetch error |
 | `Înapoi` | `Back` | Back button |
 | `Deconectat` | `Disconnected` | Connection status |
 | `Reîncearcă` | `Retry` | Error banner retry button |
@@ -56,7 +48,7 @@
 | `Urmează` | `Next` | Preparing climber label |
 | `Timpii sunt înregistrați pentru departajare` | `Times are recorded for tiebreaking` | Time criterion indicator |
 
-### 5. PublicRankings.tsx
+### 4. PublicRankings.tsx
 **Location**: `src/components/PublicRankings.tsx`
 
 | Romanian | English | Context |

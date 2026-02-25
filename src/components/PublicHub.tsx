@@ -9,13 +9,6 @@ import { useNavigate } from 'react-router-dom';
 const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
 const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/public`;
 
-/**
- * localStorage keys for spectator JWT token.
- * Token has 24h TTL; client refreshes proactively when <1h remains.
- */
-const SPECTATOR_TOKEN_KEY = 'escalada_spectator_token';
-const SPECTATOR_TOKEN_EXPIRES_KEY = 'escalada_spectator_token_expires';
-
 type PublicBoxInfo = {
   boxId: number;
   label: string;
@@ -26,76 +19,6 @@ type PublicBoxInfo = {
 };
 
 /**
- * Get or refresh spectator token from backend.
- * 
- * Token Lifecycle:
- * 1. Check localStorage for cached token + expiry timestamp
- * 2. If cached and >1h remaining, return cached token (avoids unnecessary API calls)
- * 3. If expired or missing, fetch new token from POST /api/public/token (no credentials required)
- * 4. Store token + expiry (now + expires_in seconds) in localStorage
- * 
- * Token is a JWT with "spectator" role, granting read-only access to public endpoints:
- * - GET /api/public/boxes (initiated boxes only)
- * - WS /api/public/ws/{boxId} (state snapshots, no commands)
- * 
- * Error Handling:
- * - Throws if token fetch fails (caller must handle)
- * - 401 responses trigger clearSpectatorToken() + retry (see fetchBoxes)
- * 
- * @returns {Promise<string>} Valid spectator JWT token
- * @throws {Error} If token fetch fails after retry
- */
-export async function getSpectatorToken(): Promise<string> {
-  // Check if we have a valid cached token in localStorage
-  const cached = localStorage.getItem(SPECTATOR_TOKEN_KEY);
-  const expiresStr = localStorage.getItem(SPECTATOR_TOKEN_EXPIRES_KEY);
-  
-  if (cached && expiresStr) {
-    const expires = parseInt(expiresStr, 10); // timestamp when token expires
-    // Proactive refresh: if more than 1 hour remaining, use cached token
-    // This avoids API calls on every page load while ensuring token is always fresh
-    if (Date.now() < expires - 60 * 60 * 1000) {
-      return cached;
-    }
-  }
-
-  // Token missing or expiring soon (<1h) - fetch new one from backend
-  // POST /api/public/token requires no credentials (public endpoint)
-  const response = await fetch(`${API_BASE}/token`, {
-    method: 'POST',
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to get spectator token');
-  }
-
-  const data = await response.json();
-  const token = data.access_token; // JWT with "spectator" role
-  const expiresIn = data.expires_in || 24 * 60 * 60; // TTL in seconds (default 24h)
-
-  // Persist token + expiry timestamp for future use across page reloads
-  localStorage.setItem(SPECTATOR_TOKEN_KEY, token);
-  localStorage.setItem(SPECTATOR_TOKEN_EXPIRES_KEY, String(Date.now() + expiresIn * 1000));
-
-  return token;
-}
-
-/**
- * Clear spectator token from localStorage.
- * 
- * Use Cases:
- * - 401 Unauthorized response from API (token expired/invalid)
- * - Explicit user logout (future feature)
- * - Error recovery after auth failure
- * 
- * After clearing, next getSpectatorToken() call will fetch fresh token from backend.
- */
-export function clearSpectatorToken(): void {
-  localStorage.removeItem(SPECTATOR_TOKEN_KEY);
-  localStorage.removeItem(SPECTATOR_TOKEN_EXPIRES_KEY);
-}
-
-/**
  * PublicHub: Main entry point for spectators (unauthenticated public access).
  * 
  * Purpose:
@@ -104,15 +27,9 @@ export function clearSpectatorToken(): void {
  *   2. Live Climbing: Watch specific category in progress (box selection dropdown)
  *   3. Competition Officials: View chief judge and event director info
  * 
- * Authentication:
- * - Uses spectator JWT (no credentials required, 24h TTL)
- * - Token obtained via getSpectatorToken() on component mount
- * - Token auto-refreshes when <1h remaining (proactive expiry handling)
- * 
  * API Integration:
- * - Fetches initiated boxes from GET /api/public/boxes?token=...
+ * - Fetches initiated boxes from GET /api/public/boxes
  * - Auto-refreshes boxes list every 30 seconds
- * - Handles 401 responses by clearing token + retrying
  * 
  * UI Features:
  * - Gradient hero layout with large action buttons
@@ -160,14 +77,11 @@ const PublicHub: FC = () => {
    * Fetch initiated boxes from backend.
    * 
    * Flow:
-   * 1. Get spectator token (cached or fresh)
-   * 2. Call GET /api/public/boxes?token=...
-   * 3. If 401 (token expired), clear cached token + retry once with fresh token
-   * 4. Parse response.boxes array (only initiated boxes returned by backend)
+   * 1. Call GET /api/public/boxes
+   * 2. Parse response.boxes array (only initiated boxes returned by backend)
    * 
    * Error Handling:
    * - Network errors: caught and displayed in error banner
-   * - 401 responses: automatic token refresh + single retry
    * - Non-2xx responses: generic "Failed to fetch boxes" error
    * 
    * Called:
@@ -180,28 +94,16 @@ const PublicHub: FC = () => {
       setLoading(true); // Show loading state in UI
       setError(null); // Clear previous errors
 
-      // Get token (may use cached token if still valid)
-      const token = await getSpectatorToken();
-      const response = await fetch(`${API_BASE}/boxes?token=${encodeURIComponent(token)}`);
+      const response = await fetch(`${API_BASE}/boxes`);
 
-      if (response.status === 401) {
-        // Token expired or invalid - clear cache and retry with fresh token
-        clearSpectatorToken();
-        const newToken = await getSpectatorToken();
-        const retryResponse = await fetch(`${API_BASE}/boxes?token=${encodeURIComponent(newToken)}`);
-        if (!retryResponse.ok) {
-          throw new Error('Failed to fetch boxes');
-        }
-        const data = await retryResponse.json();
-        setBoxes(data.boxes || []); // Backend returns {boxes: [...]} shape
-      } else if (!response.ok) {
-        // Other HTTP errors (5xx, 4xx except 401)
+      if (!response.ok) {
+        // HTTP error
         throw new Error('Failed to fetch boxes');
-      } else {
-        // Success: parse boxes array
-        const data = await response.json();
-        setBoxes(data.boxes || []); // Fallback to empty array if missing
       }
+
+      // Success: parse boxes array
+      const data = await response.json();
+      setBoxes(data.boxes || []); // Fallback to empty array if missing
     } catch (err) {
       // Network errors, JSON parse errors, or thrown errors from above
       setError(err instanceof Error ? err.message : 'Unknown error');

@@ -81,12 +81,6 @@ describe('PublicRankings TB interactive badges', () => {
           json: async () => ({ boxes: buildSnapshotBoxes() }),
         };
       }
-      if (String(url).includes('/api/public/token')) {
-        return {
-          ok: true,
-          json: async () => ({ access_token: 'spectator-token', expires_in: 86400 }),
-        };
-      }
       return {
         ok: false,
         status: 404,

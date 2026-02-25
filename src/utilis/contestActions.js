@@ -67,8 +67,14 @@ export async function getCompetitionOfficials() {
   return requestAdminJson('/competition_officials', 'GET', 'GET_COMPETITION_OFFICIALS');
 }
 
-export async function setCompetitionOfficials(judgeChief, competitionDirector, chiefRoutesetter) {
+export async function setCompetitionOfficials(
+  judgeChief,
+  competitionDirector,
+  chiefRoutesetter,
+  federalOfficial,
+) {
   return requestAdminJson('/competition_officials', 'POST', 'SET_COMPETITION_OFFICIALS', {
+    federalOfficial: federalOfficial ?? '',
     judgeChief: judgeChief ?? '',
     competitionDirector: competitionDirector ?? '',
     chiefRoutesetter: chiefRoutesetter ?? '',

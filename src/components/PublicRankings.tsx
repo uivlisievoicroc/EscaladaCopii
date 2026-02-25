@@ -1,6 +1,5 @@
 import React, { FC, useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSpectatorToken, clearSpectatorToken } from './PublicHub';
 import { backoffDelayMs, buildApiUrl, buildWsUrl, parseWsJson, replyPong } from '../utilis/wsClient';
 
 /**
@@ -10,7 +9,6 @@ import { backoffDelayMs, buildApiUrl, buildWsUrl, parseWsJson, replyPong } from 
  * - Displays live rankings for climbing competitions
  * - Simplified UI: Table view with rank, name, and total score
  * - WebSocket-based with exponential backoff reconnection
- * - Spectator token authentication
  *
  * Note:
  * - This is a legacy component, superseded by RankingsPage + RankingsBoard
@@ -26,7 +24,6 @@ import { backoffDelayMs, buildApiUrl, buildWsUrl, parseWsJson, replyPong } from 
  *
  * Architecture:
  * - WebSocket: Real-time updates via /api/public/ws
- * - Token: Spectator JWT from PublicHub (24h TTL)
  * - Reconnection: Exponential backoff up to 10 attempts
  * - Fallback: Initial HTTP fetch if WebSocket fails
  */
@@ -369,13 +366,8 @@ const PublicRankings: FC = () => {
    *
    * Purpose:
    * - Creates WebSocket connection to /api/public/ws
-   * - Fetches spectator token (24h TTL, stored in localStorage)
    * - Handles all WebSocket lifecycle events (open, message, error, close)
    * - Implements exponential backoff reconnection (up to 10 attempts)
-   *
-   * Token Management:
-   * - Calls getSpectatorToken() to fetch or retrieve cached token
-   * - On token error: Clears cached token, shows error (requires page refresh)
    *
    * Reconnection Strategy:
    * - Exponential backoff: delay = 1000ms * 2^attempt
@@ -387,11 +379,9 @@ const PublicRankings: FC = () => {
    * - Gives time for transient network issues to resolve
    * - Standard practice for resilient WebSocket clients
    */
-  const connectWs = useCallback(async () => {
+  const connectWs = useCallback(() => {
     try {
-      // Fetch spectator token (may use cached token from localStorage)
-      const token = await getSpectatorToken();
-      const ws = new WebSocket(`${WS_URL}?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(WS_URL);
       wsRef.current = ws;  // Store for cleanup
 
       /**
@@ -500,10 +490,6 @@ const PublicRankings: FC = () => {
         }
       };
     } catch (err) {
-      // Token error: Clear cached token (forces new token on page refresh)
-      if (err instanceof Error && err.message?.includes('token')) {
-        clearSpectatorToken();
-      }
       setError('Unable to connect.');  // Show generic error
     }
   }, []);

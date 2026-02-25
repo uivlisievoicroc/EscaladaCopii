@@ -1,6 +1,5 @@
 import React, { FC, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSpectatorToken, clearSpectatorToken } from './PublicHub';
 
 // Public pages are opened from phones/tablets on the LAN.
 // We derive the API base URL from the current host and talk to the API on port 8000.
@@ -9,6 +8,7 @@ const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/public`
 
 // Response shape for GET `/api/public/officials`.
 type Officials = {
+  federalOfficial: string;
   judgeChief: string;
   competitionDirector: string;
   chiefRoutesetter: string;
@@ -19,6 +19,7 @@ const PublicOfficials: FC = () => {
 
   // UI state: current officials data + loading/error flags.
   const [officials, setOfficials] = useState<Officials>({
+    federalOfficial: '',
     judgeChief: '',
     competitionDirector: '',
     chiefRoutesetter: '',
@@ -26,31 +27,16 @@ const PublicOfficials: FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch officials using the spectator token.
-  // The token is cached in localStorage by PublicHub helpers; on 401 we clear and retry once.
   const fetchOfficials = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const token = await getSpectatorToken();
-      const res = await fetch(`${API_BASE}/officials?token=${encodeURIComponent(token)}`);
-      if (res.status === 401) {
-        clearSpectatorToken();
-        const newToken = await getSpectatorToken();
-        const retry = await fetch(`${API_BASE}/officials?token=${encodeURIComponent(newToken)}`);
-        if (!retry.ok) throw new Error('Failed to fetch officials');
-        const data = await retry.json();
-        setOfficials({
-          judgeChief: data.judgeChief || '',
-          competitionDirector: data.competitionDirector || '',
-          chiefRoutesetter: data.chiefRoutesetter || '',
-        });
-        return;
-      }
+      const res = await fetch(`${API_BASE}/officials`);
       if (!res.ok) throw new Error('Failed to fetch officials');
       const data = await res.json();
       setOfficials({
+        federalOfficial: data.federalOfficial || '',
         judgeChief: data.judgeChief || '',
         competitionDirector: data.competitionDirector || '',
         chiefRoutesetter: data.chiefRoutesetter || '',
@@ -103,7 +89,15 @@ const PublicOfficials: FC = () => {
           </div>
         ) : (
           <div className="grid gap-4">
-            {/* Data state: render the 3 official roles as cards */}
+            {/* Data state: render the official roles as cards */}
+            <div className="p-6 rounded-2xl border border-slate-800 bg-slate-900/40">
+              <div className="text-xs uppercase tracking-wider text-slate-400">
+                Federal Official
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-white">
+                {officials.federalOfficial || '—'}
+              </div>
+            </div>
             <div className="p-6 rounded-2xl border border-slate-800 bg-slate-900/40">
               <div className="text-xs uppercase tracking-wider text-slate-400">
                 Event Director

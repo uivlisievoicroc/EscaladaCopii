@@ -258,6 +258,11 @@ const ControlPanel: FC = () => {
   const [timerDialogValue, setTimerDialogValue] = useState<string>('');
   const [timerDialogCriterion, setTimerDialogCriterion] = useState<boolean>(false);
   const [timerDialogError, setTimerDialogError] = useState<string | null>(null);
+  const [multiRouteTimeCriterionWarning, setMultiRouteTimeCriterionWarning] = useState<{
+    boxId: number;
+    categorie: string;
+    routesCount: number;
+  } | null>(null);
   const [showResetDialog, setShowResetDialog] = useState<boolean>(false);
   const [resetDialogBoxId, setResetDialogBoxId] = useState<number | null>(null);
   const [resetDialogOpts, setResetDialogOpts] = useState<{
@@ -282,6 +287,7 @@ const ControlPanel: FC = () => {
   const [routesetterNameInput, setRoutesetterNameInput] = useState<string>('');
   const [routesetterNamesTemp, setRoutesetterNamesTemp] = useState<Record<number, string>>({});
   const [routesetterDialogError, setRoutesetterDialogError] = useState<string | null>(null);
+  const [federalOfficialInput, setFederalOfficialInput] = useState<string>('');
   const [judgeChiefInput, setJudgeChiefInput] = useState<string>('');
   const [competitionDirectorInput, setCompetitionDirectorInput] = useState<string>('');
   const [chiefRoutesetterInput, setChiefRoutesetterInput] = useState<string>('');
@@ -2241,6 +2247,15 @@ const ControlPanel: FC = () => {
     setHoldClicks((prev) => ({ ...prev, [newIdx]: 0 }));
     setUsedHalfHold((prev) => ({ ...prev, [newIdx]: false }));
     setTimerStates((prev) => ({ ...prev, [newIdx]: 'idle' }));
+    // Time criterion is not compatible with multi-route uploads. Warn immediately so admin can disable it
+    // from Actions -> Setup -> Set timer for this freshly uploaded category.
+    if (routesCountNum > 1 && getTimeCriterionEnabled(newIdx)) {
+      setMultiRouteTimeCriterionWarning({
+        boxId: newIdx,
+        categorie,
+        routesCount: routesCountNum,
+      });
+    }
     setAdminActionsView('actions');
   };
 
@@ -3434,7 +3449,7 @@ const ControlPanel: FC = () => {
 
   // Open the officials modal:
   // - per-route routesetter names (per box)
-  // - global officials (chief judge / director / chief routesetter)
+  // - global officials (federal official / chief judge / director / chief routesetter)
   const openRoutesetterDialog = (boxId: number | null): void => {
     if (!ensureAdminActionsUnlocked()) return;
     if (boxId == null || listboxes.length === 0) return;
@@ -3461,6 +3476,7 @@ const ControlPanel: FC = () => {
     setShowRoutesetterDialog(true);
 
     // Load global competition officials (best-effort).
+    setFederalOfficialInput(safeGetItem('competitionFederalOfficial') || '');
     setJudgeChiefInput(safeGetItem('competitionJudgeChief') || '');
     setCompetitionDirectorInput(safeGetItem('competitionDirector') || '');
     setChiefRoutesetterInput(safeGetItem('competitionChiefRoutesetter') || '');
@@ -3468,6 +3484,8 @@ const ControlPanel: FC = () => {
       try {
         const existing = await getCompetitionOfficials();
         if (existing && typeof existing === 'object') {
+          if (typeof existing.federalOfficial === 'string')
+            setFederalOfficialInput(existing.federalOfficial);
           if (typeof existing.judgeChief === 'string') setJudgeChiefInput(existing.judgeChief);
           if (typeof existing.competitionDirector === 'string')
             setCompetitionDirectorInput(existing.competitionDirector);
@@ -3496,14 +3514,15 @@ const ControlPanel: FC = () => {
     if (currentName) {
       allNames[routesetterRouteIndex] = currentName;
     }
-    
+
+    const federalOfficial = federalOfficialInput.trim();
     const judgeChief = judgeChiefInput.trim();
     const competitionDirector = competitionDirectorInput.trim();
     const chiefRoutesetter = chiefRoutesetterInput.trim();
 
     // Validate: at least something to save (routesetter or officials)
     const hasAnyName = Object.values(allNames).some((name) => name && name.trim());
-    const hasAnyOfficial = !!judgeChief || !!competitionDirector || !!chiefRoutesetter;
+    const hasAnyOfficial = !!federalOfficial || !!judgeChief || !!competitionDirector || !!chiefRoutesetter;
     if (!hasAnyName && !hasAnyOfficial) {
       setRoutesetterDialogError('Nothing to save.');
       return;
@@ -3525,7 +3544,8 @@ const ControlPanel: FC = () => {
     // Persist global officials to backend (best-effort; requires admin).
     if (hasAnyOfficial) {
       try {
-        await setCompetitionOfficials(judgeChief, competitionDirector, chiefRoutesetter);
+        await setCompetitionOfficials(judgeChief, competitionDirector, chiefRoutesetter, federalOfficial);
+        safeSetItem('competitionFederalOfficial', federalOfficial);
         safeSetItem('competitionJudgeChief', judgeChief);
         safeSetItem('competitionDirector', competitionDirector);
         safeSetItem('competitionChiefRoutesetter', chiefRoutesetter);
@@ -4598,7 +4618,7 @@ const ControlPanel: FC = () => {
         </div>
 	      )}
 
-	      {/* Officials modal: per-route routesetters + global officials (chief judge/director/chief routesetter). */}
+	      {/* Officials modal: per-route routesetters + global officials (federal official/chief judge/director/chief routesetter). */}
 		      {showRoutesetterDialog && (
 		        <div className={styles.modalOverlay}>
 		          <div className={styles.modalCard}>
@@ -4616,12 +4636,12 @@ const ControlPanel: FC = () => {
 		            </div>
 		            <div className={styles.modalContent}>
                 <div className={styles.modalField}>
-                  <label className={styles.modalLabel}>Chief Judge</label>
+                  <label className={styles.modalLabel}>Federal Official</label>
                   <input
                     className={styles.modalInput}
-                    value={judgeChiefInput}
-                    onChange={(e) => setJudgeChiefInput(e.target.value)}
-                    placeholder="e.g. Maria Ionescu"
+                    value={federalOfficialInput}
+                    onChange={(e) => setFederalOfficialInput(e.target.value)}
+                    placeholder="e.g. Mihai Popescu"
                     type="text"
                   />
                 </div>
@@ -4642,6 +4662,16 @@ const ControlPanel: FC = () => {
                     value={chiefRoutesetterInput}
                     onChange={(e) => setChiefRoutesetterInput(e.target.value)}
                     placeholder="e.g. Elena Ionescu"
+                    type="text"
+                  />
+                </div>
+                <div className={styles.modalField}>
+                  <label className={styles.modalLabel}>Chief Judge</label>
+                  <input
+                    className={styles.modalInput}
+                    value={judgeChiefInput}
+                    onChange={(e) => setJudgeChiefInput(e.target.value)}
+                    placeholder="e.g. Maria Ionescu"
                     type="text"
                   />
                 </div>
@@ -4715,6 +4745,46 @@ const ControlPanel: FC = () => {
 	          </div>
 	        </div>
 	      )}
+
+        {/* Warning dialog: time criterion is incompatible with multi-route categories. */}
+        {multiRouteTimeCriterionWarning && (
+          <div className={styles.modalOverlay}>
+            <div className={styles.modalCard} role="dialog" aria-modal="true">
+              <div className={styles.modalHeader}>
+                <div>
+                  <div className={styles.modalTitle}>Warning</div>
+                  <div className={styles.modalSubtitle}>
+                    {`Category: ${sanitizeBoxName(
+                      multiRouteTimeCriterionWarning.categorie ||
+                        `Box ${multiRouteTimeCriterionWarning.boxId}`,
+                    )}`}
+                  </div>
+                </div>
+              </div>
+              <div className={styles.modalContent}>
+                <div className={`${styles.modalAlert} ${styles.modalAlertWarning}`} style={{ margin: 0 }}>
+                  <div style={{ fontWeight: 800, color: 'var(--accent-warning)', marginBottom: '6px' }}>
+                    Time criterion is ON, but this category has multiple routes.
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)' }}>
+	                    {`This category was uploaded with ${multiRouteTimeCriterionWarning.routesCount} routes. Time criterion (time registration) is incompatible with more than 1 route.`}
+	                    <br />
+	                    Please go to Actions → Setup, select this category, click Set timer, and turn Time criterion OFF.
+	                  </div>
+	                </div>
+                <div className={styles.modalActions}>
+                  <button
+                    className="modern-btn modern-btn-primary"
+                    onClick={() => setMultiRouteTimeCriterionWarning(null)}
+                    type="button"
+                  >
+                    ok
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
 	      {/* Timer preset modal: set per-box duration preset + time-criterion toggle (tiebreak). */}
 	      {showBoxTimerDialog && (
@@ -4891,6 +4961,7 @@ const ControlPanel: FC = () => {
 	          const isPaused = timerState === 'paused';
 	          const statusClass = isRunning ? 'running' : isPaused ? 'paused' : 'idle';
 	          const activeKey = normalizeCompetitorKey(currentClimbers[idx] || '');
+            const timeCriterionEnabled = getTimeCriterionEnabled(idx);
 	          // When all competitors are marked, the current route is effectively complete (no one left to climb).
 	          // In that state we must not allow starting the timer or opening score submission.
 	          const hasRemainingCompetitor =
@@ -4923,6 +4994,13 @@ const ControlPanel: FC = () => {
 	                  <span className={styles.timerDisplay}>
 	                    {formatTime(displaySec)}
 	                  </span>
+                    <span
+                      className={`${styles.timeCriterionBadge} ${
+                        timeCriterionEnabled ? styles.timeCriterionBadgeOn : styles.timeCriterionBadgeOff
+                      }`}
+                    >
+                      Time criterion: {timeCriterionEnabled ? 'ON' : 'OFF'}
+                    </span>
 	                </div>
 	              </div>
 

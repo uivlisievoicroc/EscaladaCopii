@@ -134,6 +134,7 @@ export interface StateSnapshot {
   timesByName?: Record<string, Array<number | null | undefined>>;
   timerPreset?: string | null;
   timerPresetSec?: number | null;
+  federalOfficial?: string;
   judgeChief?: string;
   competitionDirector?: string;
   chiefRoutesetter?: string;
