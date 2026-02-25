@@ -17,6 +17,9 @@ Claims shape (see `escalada.auth.service.create_access_token`):
 # -------------------- Standard library imports --------------------
 import os
 import re
+import socket
+from functools import lru_cache
+from ipaddress import ip_address
 from typing import Any, Dict, Iterable, Optional
 
 # -------------------- Third-party imports --------------------
@@ -26,6 +29,12 @@ from fastapi.security import OAuth2PasswordBearer
 # -------------------- Local application imports --------------------
 from escalada.auth.service import decode_token
 from escalada.security import admin_session, license_events, usb_license
+
+# psutil is an optional dependency here; we use it for robust local interface IP discovery.
+try:
+    import psutil  # type: ignore
+except Exception:  # pragma: no cover - handled at runtime
+    psutil = None
 
 # Cookie name must match auth.py
 COOKIE_NAME = "escalada_token"
@@ -61,12 +70,61 @@ def _parse_admin_trusted_ips(raw: str | None) -> set[str]:
     return values or set(DEFAULT_ADMIN_TRUSTED_IPS)
 
 
+@lru_cache(maxsize=1)
+def _get_local_interface_ips() -> set[str]:
+    """
+    Return a set of IPs assigned to the local machine.
+
+    This allows the host laptop to be treated as a trusted admin even when accessing
+    the server via its LAN IP address (packaged runs do not rely on a repo `.env`).
+    """
+    ips: set[str] = set()
+
+    if psutil is not None:
+        try:
+            for addresses in psutil.net_if_addrs().values():
+                for addr in addresses:
+                    if addr.family not in (socket.AF_INET, socket.AF_INET6):
+                        continue
+                    raw = str(getattr(addr, "address", "") or "").strip()
+                    if not raw:
+                        continue
+                    # On some platforms IPv6 link-local addresses include a scope id (e.g. "%en0").
+                    raw = raw.split("%", 1)[0]
+                    try:
+                        parsed = ip_address(raw)
+                    except ValueError:
+                        continue
+                    if parsed.is_unspecified:
+                        continue
+                    ips.add(raw.lower())
+        except Exception:
+            pass
+
+    # Fallback: best-effort default outbound interface IP (single address).
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            local_ip = sock.getsockname()[0]
+            if local_ip:
+                ips.add(str(local_ip).strip().lower())
+        finally:
+            sock.close()
+    except Exception:
+        pass
+
+    return ips
+
+
 def is_trusted_admin_ip(host: str | None) -> bool:
     normalized_host = (host or "").strip().lower()
     if not normalized_host:
         return False
     trusted_ips = _parse_admin_trusted_ips(os.getenv("ADMIN_TRUSTED_IPS"))
-    return normalized_host in trusted_ips
+    if normalized_host in trusted_ips:
+        return True
+    return normalized_host in _get_local_interface_ips()
 
 
 def _parse_box_id(value: Any) -> int | None:
