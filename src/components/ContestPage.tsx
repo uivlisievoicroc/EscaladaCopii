@@ -14,10 +14,10 @@ import type { Competitor, WebSocketMessage } from '../types';
 // (WebSocket logic moved into component)
 
 // Build API/WS endpoints from current host (works on LAN for mobile/TV devices).
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API_CMD = `${API_PROTOCOL}://${window.location.hostname}:8000/api/cmd`;
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api`;
+const API_CMD = '/api/cmd';
+const API_BASE = '/api';
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
+const WS_HOST = window.location.host;
 
 // -------------------- Internal type definitions --------------------
 // These are local-only helper shapes for window messaging and ranking.
@@ -248,7 +248,7 @@ const ContestPage: FC = () => {
   });
   useEffect(() => {
     reconnectRef.current.shouldReconnect = true;
-    const url = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/public/ws/${boxId}`;
+    const url = `${WS_PROTOCOL}://${WS_HOST}/api/public/ws/${boxId}`;
 
     // Handle WS payloads for this box.
     // - STATE_SNAPSHOT is authoritative and hydrates the full UI (safe to open mid-contest).

@@ -4,8 +4,7 @@ import {
   handleAdminSecurityErrorResponse,
 } from './adminSecurityService';
 
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/admin`;
+const API_BASE = '/api/admin';
 
 /**
  * @typedef {Object} FetchAuditEventsOptions

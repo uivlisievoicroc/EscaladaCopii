@@ -3,11 +3,9 @@ import { useNavigate } from 'react-router-dom';
 
 /**
  * API Configuration
- * Protocol matches current page (http/https) to avoid mixed content warnings.
- * API is always on port 8000 (FastAPI backend), on same hostname.
+ * Uses same-origin relative API paths.
  */
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/public`;
+const API_BASE = '/api/public';
 
 type PublicBoxInfo = {
   boxId: number;

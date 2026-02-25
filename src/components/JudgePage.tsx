@@ -47,9 +47,9 @@ const JudgePage: FC = () => {
   debugLog('🟡 [JudgePage] Component rendering START');
 
   // Build API/WS endpoints from the current host (works for LAN deployments and mobile devices).
-  const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-  const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000`;
+  const API_BASE = '';
   const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const WS_HOST = window.location.host;
 
   // Read the box id from the route (e.g. `#/judge/0`) and use it to scope all actions/subscriptions.
   const { boxId } = useParams<{ boxId: string }>();
@@ -205,10 +205,10 @@ const JudgePage: FC = () => {
       return '';
     }
     // No token in URL - WebSocket auth will use httpOnly cookie
-    const url = `${WS_PROTOCOL}://${window.location.hostname}:8000/api/ws/${idx}`;
+    const url = `${WS_PROTOCOL}://${WS_HOST}/api/ws/${idx}`;
     debugLog('🟡 [JudgePage] WS_URL memoized:', url);
     return url;
-  }, [idx, WS_PROTOCOL, authActive]);
+  }, [idx, WS_PROTOCOL, WS_HOST, authActive]);
 
   // Message handler for all incoming WS messages.
   // We treat STATE_SNAPSHOT as authoritative and command echoes as incremental UI updates.

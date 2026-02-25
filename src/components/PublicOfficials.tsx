@@ -1,10 +1,8 @@
 import React, { FC, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-// Public pages are opened from phones/tablets on the LAN.
-// We derive the API base URL from the current host and talk to the API on port 8000.
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/public`;
+// Public pages are opened from phones/tablets on the LAN using same-origin API paths.
+const API_BASE = '/api/public';
 
 // Response shape for GET `/api/public/officials`.
 type Officials = {

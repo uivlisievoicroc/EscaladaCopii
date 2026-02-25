@@ -39,7 +39,7 @@ import { backoffDelayMs, buildWsUrl, parseWsJson, replyPong } from '../utilis/ws
  * - https: → wss: (secure WebSocket)
  * - http: → ws: (plain WebSocket)
  *
- * Endpoint: `wss://{host}:8000/api/public/ws/{boxId}`
+ * Endpoint: `wss://{host}/api/public/ws/{boxId}`
  * - Backend: escalada-api/escalada/api/public.py router
  */
 const WS_BASE = buildWsUrl('/api/public/ws');

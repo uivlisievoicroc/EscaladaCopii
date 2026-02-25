@@ -1,5 +1,4 @@
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000`;
+const API_BASE = '';
 
 export const ADMIN_SECURITY_TOKEN_KEY = 'adminSecurityToken';
 export const ADMIN_SECURITY_FORCE_LOCK_EVENT = 'admin-security-force-lock';
@@ -185,4 +184,3 @@ export async function lockAdminSecurity(): Promise<LicenseStatus | null> {
   }
   return readStatusJson(response);
 }
-

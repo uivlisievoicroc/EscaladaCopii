@@ -7,10 +7,8 @@ import {
 } from '../utilis/adminSecurityService';
 import styles from './ControlPanel.module.css';
 
-// Admin-only route (cookie-authenticated) is served under `/api/admin`.
-// The UI always talks to the API on port 8000 on the same host.
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000/api/admin`;
+// Admin-only route (cookie-authenticated) is served under same-origin `/api/admin`.
+const API_BASE = '/api/admin';
 
 const ModalUpload = ({ isOpen, onClose, onUpload, embedded = false, disabled = false }) => {
   // Form state: category label, Excel file, number of routes and per-route holds count.

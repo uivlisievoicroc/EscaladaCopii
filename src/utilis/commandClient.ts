@@ -6,12 +6,10 @@ import {
   handleAdminSecurityErrorResponse,
 } from './adminSecurityService';
 
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-
 export const API_ENDPOINTS = {
-  CMD: `${API_PROTOCOL}://${window.location.hostname}:8000/api/cmd`,
-  ADMIN: `${API_PROTOCOL}://${window.location.hostname}:8000/api/admin`,
-  STATE: `${API_PROTOCOL}://${window.location.hostname}:8000/api/state`,
+  CMD: '/api/cmd',
+  ADMIN: '/api/admin',
+  STATE: '/api/state',
 };
 
 type RequestJsonOptions = {

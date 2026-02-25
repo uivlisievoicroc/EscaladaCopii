@@ -5,8 +5,7 @@ import {
   handleAdminSecurityErrorResponse,
 } from './adminSecurityService';
 
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000`;
+const API_BASE = '';
 // Token is now in httpOnly cookie, not accessible via JS
 // Only store non-sensitive metadata in localStorage
 const ROLE_KEY = 'authRole';

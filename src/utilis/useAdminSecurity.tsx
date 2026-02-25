@@ -17,8 +17,7 @@ import {
   unlockAdminSecurity,
 } from './adminSecurityService';
 
-const API_PROTOCOL = window.location.protocol === 'https:' ? 'https' : 'http';
-const API_BASE = `${API_PROTOCOL}://${window.location.hostname}:8000`;
+const API_BASE = '';
 
 type AdminSecurityContextValue = {
   licenseValid: boolean;
@@ -241,4 +240,3 @@ export function useAdminSecurity(): AdminSecurityContextValue {
   }
   return context;
 }
-

@@ -69,12 +69,11 @@ const openTabs: { [boxId: number]: Window | null } = {};
 
 // Build API/WS endpoints from the current host (works for LAN deployments and mobile/tablet devices).
 const getApiConfig = () => {
-  const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
   const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const hostname = window.location.hostname;
   return {
-    API_CP: `${protocol}://${hostname}:8000/api/cmd`,
+    API_CP: '/api/cmd',
     WS_PROTOCOL_CP: wsProtocol,
+    WS_HOST: window.location.host,
   };
 };
 
@@ -1712,7 +1711,7 @@ const ControlPanel: FC = () => {
         // that manually manages the connection to fit our multi-box pattern
         const config = getApiConfig();
         // WebSocket will use cookie for auth (no token in URL for security)
-        const url = `${config.WS_PROTOCOL_CP}://${window.location.hostname}:8000/api/ws/${idx}`;
+        const url = `${config.WS_PROTOCOL_CP}://${config.WS_HOST}/api/ws/${idx}`;
         const { ws, disconnect } = connectControlPanelWs({
           idx,
           url,

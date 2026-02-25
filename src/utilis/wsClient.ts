@@ -1,14 +1,18 @@
-export const getHttpProtocol = (): 'http' | 'https' =>
-  window.location.protocol === 'https:' ? 'https' : 'http';
+import {
+  buildApiPath,
+  buildApiUrl as buildAbsoluteApiUrl,
+  buildWsUrl as buildAbsoluteWsUrl,
+  getHttpProtocol,
+  getWsProtocol,
+} from './network';
 
-export const getWsProtocol = (): 'ws' | 'wss' =>
-  window.location.protocol === 'https:' ? 'wss' : 'ws';
+export { getHttpProtocol, getWsProtocol };
 
-export const buildApiUrl = (path: string): string =>
-  `${getHttpProtocol()}://${window.location.hostname}:8000${path}`;
+export const buildApiUrl = (path: string): string => buildApiPath(path);
 
-export const buildWsUrl = (path: string): string =>
-  `${getWsProtocol()}://${window.location.hostname}:8000${path}`;
+export const buildWsUrl = (path: string): string => buildAbsoluteWsUrl(path);
+
+export const buildApiOriginUrl = (path: string): string => buildAbsoluteApiUrl(path);
 
 export const backoffDelayMs = (
   attempt: number,
