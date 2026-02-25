@@ -75,6 +75,7 @@ async function parseErrorData(response: Response): Promise<SecurityApiError | nu
 function extractErrorCode(errorData: SecurityApiError | null): string | null {
   if (!errorData) return null;
   if (typeof errorData.code === 'string') return errorData.code;
+  if (typeof errorData.detail === 'string') return errorData.detail;
   if (
     errorData.detail &&
     typeof errorData.detail === 'object' &&
@@ -144,6 +145,7 @@ export async function unlockAdminSecurity(): Promise<{
     const code = extractErrorCode(data) || 'unlock_failed';
     const reason =
       data?.reason ||
+      (typeof data?.detail === 'string' ? data.detail : null) ||
       (typeof data?.detail === 'object' ? data?.detail?.reason : null) ||
       code;
     throw new Error(`${code}:${reason}`);

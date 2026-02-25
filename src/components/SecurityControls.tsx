@@ -16,6 +16,19 @@ const SecurityControls: React.FC<SecurityControlsProps> = ({ disabled = false })
     lock,
   } = useAdminSecurity();
 
+  const onUnlock = async (): Promise<void> => {
+    try {
+      await unlock();
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message ? error.message : String(error);
+      alert(
+        `Unlock failed (${message}).\n\n` +
+          `Note: Unlock is allowed only on the host/admin laptop (trusted IP).`,
+      );
+    }
+  };
+
   return (
     <div className="flex items-center gap-2">
       <span
@@ -45,7 +58,7 @@ const SecurityControls: React.FC<SecurityControlsProps> = ({ disabled = false })
           className="modern-btn modern-btn-primary"
           type="button"
           disabled={disabled || loading || !licenseValid}
-          onClick={() => void unlock()}
+          onClick={() => void onUnlock()}
           title={!licenseValid ? `USB not valid (${licenseReason})` : 'Unlock admin actions'}
         >
           Unlock
@@ -56,4 +69,3 @@ const SecurityControls: React.FC<SecurityControlsProps> = ({ disabled = false })
 };
 
 export default SecurityControls;
-
