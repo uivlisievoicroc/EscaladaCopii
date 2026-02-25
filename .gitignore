@@ -5,14 +5,22 @@ __pycache__/
 .mypy_cache/
 .venv/
 .env
+.env.*
+!.env.example
 .DS_Store
 *.log
 
 # Runtime artifacts
+data/
 backups/
 uploads/
+output/
 coverage.xml
 
 dist/
 build/
 *.egg-info/
+
+# Editor artifacts
+.vscode/
+.idea/
