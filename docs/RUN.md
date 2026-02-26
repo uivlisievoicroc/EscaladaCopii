@@ -3,8 +3,19 @@
 ## 1) Start server on admin laptop
 Run the packaged binary on the host laptop.
 
-- Windows: double click `EscaladaServer.exe`
+- Windows: double click `Start EscaladaServer.bat` (recommended, if included) or `EscaladaServer.exe`
 - macOS/Linux: run `./EscaladaServer` from terminal
+
+### Windows: Double-click start (recommended)
+If your release zip includes `Start EscaladaServer.bat`:
+1. Unzip the release.
+2. Double-click `Start EscaladaServer.bat`.
+3. Keep the console window open during the competition.
+
+This launcher:
+- starts `EscaladaServer.exe`
+- detects the selected port in range `8000..8100`
+- opens the browser on the laptop LAN IP (important for QR links)
 
 ### macOS: Double-click start (recommended)
 If your release zip includes `Start EscaladaServer.command`:
