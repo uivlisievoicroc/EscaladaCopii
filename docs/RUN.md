@@ -6,6 +6,17 @@ Run the packaged binary on the host laptop.
 - Windows: double click `EscaladaServer.exe`
 - macOS/Linux: run `./EscaladaServer` from terminal
 
+### macOS: Double-click start (recommended)
+If your release zip includes `Start EscaladaServer.command`:
+1. Unzip the release.
+2. Right click `Start EscaladaServer.command` → `Open` (first run, unsigned).
+3. Keep the Terminal window open during the competition.
+
+This launcher:
+- starts `EscaladaServer`
+- detects the selected port in range `8000..8100`
+- opens the browser on the laptop LAN IP (important for QR links)
+
 The server binds `0.0.0.0` and tries ports in range `8000..8100`.
 If `8000` is busy, logs show:
 `Port 8000 busy -> using <port>`
