@@ -99,6 +99,59 @@ echo "Stop: Ctrl+C sau închide fereastra."
 wait "$pid"
 """
 
+WINDOWS_START_BAT_NAME = "Start EscaladaServer.bat"
+WINDOWS_START_BAT_CONTENT = """@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+
+pushd "%~dp0"
+
+set "PORT_MIN=%ESCALADA_PORT_MIN%"
+if "%PORT_MIN%"=="" set "PORT_MIN=8000"
+set "PORT_MAX=%ESCALADA_PORT_MAX%"
+if "%PORT_MAX%"=="" set "PORT_MAX=8100"
+
+rem Prefer secret-file (if present) to avoid accidental global env values.
+set "SECRET_FILE=%APPDATA%\\EscaladaServer\\secrets\\usb_license_secret.txt"
+if exist "%SECRET_FILE%" (
+  set "USB_LICENSE_SECRET="
+)
+
+rem Locate binary (onefile vs onedir)
+set "BIN=%~dp0EscaladaServer.exe"
+if exist "%BIN%" goto found_bin
+set "BIN=%~dp0EscaladaServer\\EscaladaServer.exe"
+if exist "%BIN%" goto found_bin
+echo Could not find EscaladaServer.exe near this launcher.
+echo Expected: "%~dp0EscaladaServer.exe" or "%~dp0EscaladaServer\\EscaladaServer.exe"
+pause
+exit /b 1
+
+:found_bin
+echo Starting EscaladaServer...
+start "" /B "%BIN%" --host 0.0.0.0 --port-min %PORT_MIN% --port-max %PORT_MAX%
+
+rem Best-effort LAN IPv4 (default route interface)
+set "LAN_IP="
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$idx=(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty InterfaceIndex); if($idx){ (Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1 -ExpandProperty IPAddress) }"`) do set "LAN_IP=%%I"
+if "%LAN_IP%"=="" set "LAN_IP=127.0.0.1"
+
+rem Detect selected port (scan PORT_MIN..PORT_MAX for /api/runtime, max ~45s)
+set "SELECTED_PORT="
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$min=%PORT_MIN%; $max=%PORT_MAX%; $deadline=(Get-Date).AddSeconds(45); while((Get-Date) -lt $deadline){ for($p=$min; $p -le $max; $p++){ try{ $r=Invoke-RestMethod -TimeoutSec 1 -Uri ('http://127.0.0.1:{0}/api/runtime' -f $p); if($r -and $r.port){ Write-Output $r.port; exit 0 } } catch{} } Start-Sleep -Milliseconds 250 }"`) do set "SELECTED_PORT=%%P"
+if "%SELECTED_PORT%"=="" set "SELECTED_PORT=%PORT_MIN%"
+
+echo.
+echo LAN URL (for QR): http://%LAN_IP%:%SELECTED_PORT%/
+start "" "http://%LAN_IP%:%SELECTED_PORT%/"
+echo.
+echo Keep this window open during the competition.
+echo Stop: close this window.
+
+:loop
+timeout /t 60 /nobreak >nul
+goto loop
+"""
+
 
 def run(cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     print("+", " ".join(cmd))
@@ -315,7 +368,8 @@ def main() -> None:
         stem = f"{BINARY_NAME}-{version}-{platform_slug}-{mode}"
         extension = ".zip" if kind == "zip" else ".tar.gz"
         archive_path = release_dir / f"{stem}{extension}"
-        if platform.system().lower() == "darwin":
+        system = platform.system().lower()
+        if system in {"darwin", "windows"}:
             with tempfile.TemporaryDirectory(prefix=f"escalada_bundle_{mode}_") as tmp_dir:
                 bundle_root = Path(tmp_dir)
                 bundled_target = bundle_root / built_path.name
@@ -324,12 +378,18 @@ def main() -> None:
                 else:
                     shutil.copy2(built_path, bundled_target)
 
-                launcher_path = bundle_root / MACOS_START_COMMAND_NAME
-                launcher_path.write_text(MACOS_START_COMMAND_CONTENT, encoding="utf-8")
-                try:
-                    launcher_path.chmod(0o755)
-                except Exception:
-                    pass
+                if system == "darwin":
+                    launcher_path = bundle_root / MACOS_START_COMMAND_NAME
+                    launcher_path.write_text(MACOS_START_COMMAND_CONTENT, encoding="utf-8")
+                    try:
+                        launcher_path.chmod(0o755)
+                    except Exception:
+                        pass
+                elif system == "windows":
+                    launcher_path = bundle_root / WINDOWS_START_BAT_NAME
+                    launcher_path.parent.mkdir(parents=True, exist_ok=True)
+                    with launcher_path.open("w", encoding="utf-8", newline="\r\n") as handle:
+                        handle.write(WINDOWS_START_BAT_CONTENT)
 
                 make_archive_dir_contents(source_dir=bundle_root, destination=archive_path, kind=kind)
         else:
