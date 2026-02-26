@@ -9,10 +9,95 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 
 BINARY_NAME = "EscaladaServer"
+
+MACOS_START_COMMAND_NAME = "Start EscaladaServer.command"
+MACOS_START_COMMAND_CONTENT = """#!/bin/bash
+set -euo pipefail
+
+PORT_MIN="${ESCALADA_PORT_MIN:-8000}"
+PORT_MAX="${ESCALADA_PORT_MAX:-8100}"
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Prefer secret-file (dacă există), evită env accidental setat global.
+SECRET_FILE="$HOME/Library/Application Support/EscaladaServer/secrets/usb_license_secret.txt"
+if [ -s "$SECRET_FILE" ]; then
+  unset USB_LICENSE_SECRET || true
+fi
+
+# Locate binary (onefile vs onedir)
+BIN=""
+if [ -x "$DIR/EscaladaServer" ] && [ -f "$DIR/EscaladaServer" ]; then
+  BIN="$DIR/EscaladaServer"
+elif [ -x "$DIR/EscaladaServer/EscaladaServer" ]; then
+  BIN="$DIR/EscaladaServer/EscaladaServer"
+else
+  echo "Nu găsesc binarul EscaladaServer lângă acest fișier."
+  echo "Așteptat: $DIR/EscaladaServer  sau  $DIR/EscaladaServer/EscaladaServer"
+  read -r -p "Enter ca să ieși..."
+  exit 1
+fi
+
+chmod +x "$BIN" 2>/dev/null || true
+
+# Best-effort LAN IPv4 (default route interface)
+iface="$(route get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+lan_ip=""
+if [ -n "$iface" ]; then
+  lan_ip="$(ipconfig getifaddr "$iface" 2>/dev/null || true)"
+fi
+if [ -z "$lan_ip" ]; then
+  for ifc in en0 en1; do
+    lan_ip="$(ipconfig getifaddr "$ifc" 2>/dev/null || true)"
+    [ -n "$lan_ip" ] && break
+  done
+fi
+[ -z "$lan_ip" ] && lan_ip="127.0.0.1"
+
+echo "Starting EscaladaServer..."
+"$BIN" &
+pid=$!
+
+cleanup() {
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+selected=""
+if command -v curl >/dev/null 2>&1; then
+  for _ in $(seq 1 120); do
+    for p in $(seq "$PORT_MIN" "$PORT_MAX"); do
+      if curl -fsS --max-time 0.3 "http://127.0.0.1:${p}/api/runtime" >/dev/null 2>&1; then
+        selected="$p"
+        break
+      fi
+    done
+    [ -n "$selected" ] && break
+    sleep 0.25
+  done
+fi
+
+echo ""
+if [ -n "$selected" ]; then
+  echo "LAN URL (pentru QR): http://${lan_ip}:${selected}/"
+  open "http://${lan_ip}:${selected}/" >/dev/null 2>&1 || true
+else
+  echo "Nu am detectat automat portul. Uită-te în log pentru portul ales (8000..8100), apoi deschide:"
+  echo "  http://${lan_ip}:<port>/"
+fi
+
+echo ""
+echo "Ține această fereastră deschisă în timpul concursului."
+echo "Stop: Ctrl+C sau închide fereastra."
+wait "$pid"
+"""
 
 
 def run(cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -58,6 +143,25 @@ def make_archive(source: Path, destination: Path, kind: str) -> None:
     if kind == "tar.gz":
         with tarfile.open(destination, "w:gz") as tf:
             tf.add(source, arcname=source.name)
+        return
+
+    raise RuntimeError(f"Unsupported archive kind: {kind}")
+
+
+def make_archive_dir_contents(source_dir: Path, destination: Path, kind: str) -> None:
+    """Archive the *contents* of a directory (not the directory itself)."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "zip":
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for item in source_dir.rglob("*"):
+                if item.is_file():
+                    zf.write(item, item.relative_to(source_dir))
+        return
+
+    if kind == "tar.gz":
+        with tarfile.open(destination, "w:gz") as tf:
+            for item in source_dir.iterdir():
+                tf.add(item, arcname=item.name)
         return
 
     raise RuntimeError(f"Unsupported archive kind: {kind}")
@@ -211,7 +315,25 @@ def main() -> None:
         stem = f"{BINARY_NAME}-{version}-{platform_slug}-{mode}"
         extension = ".zip" if kind == "zip" else ".tar.gz"
         archive_path = release_dir / f"{stem}{extension}"
-        make_archive(source=built_path, destination=archive_path, kind=kind)
+        if platform.system().lower() == "darwin":
+            with tempfile.TemporaryDirectory(prefix=f"escalada_bundle_{mode}_") as tmp_dir:
+                bundle_root = Path(tmp_dir)
+                bundled_target = bundle_root / built_path.name
+                if built_path.is_dir():
+                    shutil.copytree(built_path, bundled_target)
+                else:
+                    shutil.copy2(built_path, bundled_target)
+
+                launcher_path = bundle_root / MACOS_START_COMMAND_NAME
+                launcher_path.write_text(MACOS_START_COMMAND_CONTENT, encoding="utf-8")
+                try:
+                    launcher_path.chmod(0o755)
+                except Exception:
+                    pass
+
+                make_archive_dir_contents(source_dir=bundle_root, destination=archive_path, kind=kind)
+        else:
+            make_archive(source=built_path, destination=archive_path, kind=kind)
         archives.append(archive_path)
         print(f"Created artifact: {archive_path}")
 
