@@ -1,14 +1,14 @@
 # RELEASE
 
 ## Ownership model
-Release source of truth is in orchestrator repo:
+Release source of truth is in the orchestrator repo (`uivlisievoicroc/escalada-orchestrator`):
 
 - Workflow: `.github/workflows/release.yml`
 - Build script: `scripts/build_release.py`
 - Smoke script: `scripts/smoke_runtime.py`
 - PyInstaller spec: `packaging/pyinstaller.spec`
 
-Runtime code stays in `repos/escalada-api`.
+Runtime code stays in this repo (`escalada-api`) and the other app repos (`escalada-ui`, `escalada-core`).
 
 ## Local build commands
 
@@ -23,13 +23,15 @@ python scripts/build_release.py \
   --release-dir release/local
 ```
 
+This assumes you cloned the three repos under `repos/` in the orchestrator working directory.
+
 Output:
 - `release/<target>/...onedir...`
 - `release/<target>/...onefile...`
 - `release/<target>/SHA256SUMS.txt`
 
 ## CI release flow (tagged)
-1. Push tag `vX.Y.Z` to orchestrator repo.
+1. Push tag `vX.Y.Z` to the orchestrator repo (`escalada-orchestrator`).
 2. GitHub Actions `Release` workflow runs matrix builds on:
 - `windows-latest`
 - `macos-latest`
@@ -56,6 +58,7 @@ Get-FileHash .\artifact-name.zip -Algorithm SHA256
 ## Notes
 - macOS code signing/notarization is optional in this phase; unsigned app guidance is in `docs/RUN.md`.
 - Windows firewall prompt is expected on first run; allow private network access for LAN usage.
+- If `escalada-api` / `escalada-ui` / `escalada-core` are private, configure `ESCALADA_REPOS_TOKEN` (a PAT with repo read access) as a secret in the orchestrator repo.
 
 ## Release checklist
 1. Ensure `main` CI is green.
