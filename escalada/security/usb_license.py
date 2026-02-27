@@ -135,8 +135,8 @@ def _is_candidate_partition(partition) -> bool:
         drive_type = _windows_drive_type(mountpoint)
         if drive_type is None:
             return True
-        # DRIVE_REMOVABLE (2)
-        return drive_type == 2
+        # DRIVE_REMOVABLE (2) or DRIVE_FIXED (3). Some USB sticks are reported as "fixed" on Windows.
+        return drive_type in (2, 3)
 
     return False
 
