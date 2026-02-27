@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import socket
+import sys
 from dataclasses import dataclass
 
 import uvicorn
@@ -102,7 +103,17 @@ def main() -> None:
     server = uvicorn.Server(config)
 
     try:
-        asyncio.run(server.serve(sockets=[reserved.socket]))
+        # On Windows, passing pre-bound sockets to uvicorn can prevent the server from
+        # accepting connections on some environments (including CI runners).
+        # Prefer letting uvicorn bind the port normally.
+        if sys.platform.startswith("win"):
+            try:
+                reserved.socket.close()
+            except Exception:
+                pass
+            asyncio.run(server.serve())
+        else:
+            asyncio.run(server.serve(sockets=[reserved.socket]))
     finally:
         try:
             reserved.socket.close()
@@ -112,4 +123,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
