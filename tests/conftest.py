@@ -5,6 +5,7 @@ Pytest configuration and fixtures for Escalada tests
 import sys
 import types
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -55,6 +56,36 @@ def pytest_configure(config):
         websockets_stub.WebSocket = _DummyWebSocket
         sys.modules["starlette"] = starlette_stub
         sys.modules["starlette.websockets"] = websockets_stub
+
+
+@pytest.fixture(autouse=True)
+def isolate_test_runtime_state(monkeypatch, tmp_path):
+    """Run every test with isolated secrets and clean in-memory security state."""
+    secrets_dir = Path(tmp_path) / "secrets"
+    secrets_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ESCALADA_SECRETS_DIR", str(secrets_dir))
+
+    try:
+        from escalada.security import admin_license
+    except Exception:
+        admin_license = None
+
+    if admin_license is not None:
+        monkeypatch.setattr(admin_license, "_cached_result", None, raising=False)
+        monkeypatch.setattr(admin_license, "_cached_at_monotonic", 0.0, raising=False)
+
+    try:
+        from escalada.security import recovery_codes
+    except Exception:
+        recovery_codes = None
+
+    if recovery_codes is not None and hasattr(recovery_codes, "reset_runtime_state"):
+        recovery_codes.reset_runtime_state()
+
+    yield
+
+    if recovery_codes is not None and hasattr(recovery_codes, "reset_runtime_state"):
+        recovery_codes.reset_runtime_state()
 
 
 @pytest.fixture(autouse=True)

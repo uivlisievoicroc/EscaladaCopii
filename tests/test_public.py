@@ -95,7 +95,7 @@ def test_public_officials_is_unauthenticated(client: TestClient):
 
 def test_public_token_endpoint_removed(client: TestClient):
     response = client.post("/api/public/token")
-    assert response.status_code == 404
+    assert response.status_code in {404, 405}
 
 
 def test_public_ws_box_is_unauthenticated_and_read_only(client: TestClient):

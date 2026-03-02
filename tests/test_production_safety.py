@@ -18,6 +18,8 @@ def test_trusted_admin_ip_defaults_to_localhost(monkeypatch):
 
 def test_trusted_admin_ip_uses_env_allowlist(monkeypatch):
     monkeypatch.setenv("ADMIN_TRUSTED_IPS", "10.0.0.1,testclient")
+    auth_deps._get_local_interface_ips.cache_clear()
+    monkeypatch.setattr(auth_deps, "_get_local_interface_ips", lambda: set())
     assert auth_deps.is_trusted_admin_ip("testclient") is True
     assert auth_deps.is_trusted_admin_ip("10.0.0.1") is True
     assert auth_deps.is_trusted_admin_ip("127.0.0.1") is False

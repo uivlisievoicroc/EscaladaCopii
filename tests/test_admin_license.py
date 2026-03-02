@@ -18,6 +18,9 @@ from escalada.security import admin_license
 @pytest.fixture(autouse=True)
 def reset_admin_license_cache(monkeypatch, tmp_path):
     monkeypatch.setenv("ESCALADA_SECRETS_DIR", str(tmp_path))
+    monkeypatch.delenv("ADMIN_LICENSE_PUBLIC_KEY_PEM", raising=False)
+    monkeypatch.delenv("ADMIN_LICENSE_PUBLIC_KEYS_PEM_BY_KID", raising=False)
+    monkeypatch.setenv("ADMIN_LICENSE_DEFAULT_KID", "default")
     monkeypatch.setattr(admin_license, "_cached_result", None, raising=False)
     monkeypatch.setattr(admin_license, "_cached_at_monotonic", 0.0, raising=False)
     yield
