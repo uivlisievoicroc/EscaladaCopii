@@ -33,8 +33,8 @@ EXPECTED_AUDIENCE = "escalada-admin"
 PUBLIC_KEYS_PEM_BY_KID: dict[str, str] = {
     "default": (
         "-----BEGIN PUBLIC KEY-----\n"
-        "MCowBQYDK2VwAyEAMKgx/yzbcE1DrPXJ/B9LoR/lsNyy2/vqfJlpuCblfJE=\n"
-        "-----END PUBLIC KEY-----"
+        "MCowBQYDK2VwAyEA1OejiVMDlFBxzidB680hZD6zLtYumsO3icaC/6ZQeuE=\n"
+        "-----END PUBLIC KEY-----\n"
     ),
 }
 
