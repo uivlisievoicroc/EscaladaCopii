@@ -66,10 +66,11 @@ Action:
 2. Click `Open`.
 3. Confirm `Open` again in the warning dialog.
 
-## 4) USB admin security behavior
+## 4) Admin security behavior (USB + emergency recovery + offline license)
 - USB key is **not required for server startup**.
-- USB key **is required for admin-protected mutating actions** (unlock flow).
-- Judge/public read-only usage remains available without USB unlock.
+- Admin actions follow Policy A:
+  `admin_unlocked && admin_license_valid && (usb_license_valid || recovery_override_active)`
+- Judge/public read-only usage remains unaffected.
 
 ### USB secret (required for validation)
 Packaged runs must have `USB_LICENSE_SECRET` available so the server can validate `competition.key` on the stick.
@@ -78,6 +79,28 @@ Recommended (persistent, no terminal export): create a 1-line file in app-data:
 - macOS: `~/Library/Application Support/EscaladaServer/secrets/usb_license_secret.txt`
 - Windows: `%APPDATA%\\EscaladaServer\\secrets\\usb_license_secret.txt`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/EscaladaServer/secrets/usb_license_secret.txt`
+
+### Admin license file (required for admin flows)
+Place `admin_license.jwt` in secrets dir:
+- macOS: `~/Library/Application Support/EscaladaServer/secrets/admin_license.jwt`
+- Windows: `%APPDATA%\\EscaladaServer\\secrets\\admin_license.jwt`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/EscaladaServer/secrets/admin_license.jwt`
+
+Issue it offline using:
+`poetry run python tools/issue_admin_license.py --private-key /path/to/ed25519_private.pem --expires-at 2026-12-31T23:59:59Z --kid default`
+
+### Recovery codes file (break-glass)
+Generate once and keep on paper:
+`poetry run python tools/generate_recovery_codes.py`
+
+This writes `recovery_codes.json` in `ESCALADA_SECRETS_DIR` with hashed one-time codes only.
+
+Emergency override rules:
+- Override lasts 24h.
+- Override does not auto-extend if already active.
+- Rate limit is 5 attempts / 5 min / IP (in-memory; server restart resets counters).
+- Invalid attempts use incremental backoff.
+- Audit logs store outcome/IP/timestamp/`code_id`; never the code plaintext.
 
 ## 5) QR workflow
 From Control Panel:

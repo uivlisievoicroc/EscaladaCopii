@@ -99,6 +99,7 @@ def test_check_license_invalid_signature(monkeypatch):
 
 def test_check_license_reports_misconfigured_without_secret(monkeypatch):
     monkeypatch.delenv("USB_LICENSE_SECRET", raising=False)
+    monkeypatch.setattr(usb_license, "_load_usb_secret_from_file", lambda: "")
 
     result = usb_license.check_license(force_refresh=True)
 

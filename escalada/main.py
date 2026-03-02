@@ -27,7 +27,11 @@ from fastapi.staticfiles import StaticFiles
 from escalada.api import live as live_module
 from escalada.api.audit import router as audit_router
 from escalada.api.auth import router as auth_router
-from escalada.api.backup import collect_snapshots, router as backup_router, write_backup_file
+from escalada.api.backup import (
+    collect_snapshots,
+    router as backup_router,
+    write_backup_file,
+)
 from escalada.api.health import router as health_router
 from escalada.api.license import router as license_router
 from escalada.api.live import router as live_router
@@ -35,7 +39,13 @@ from escalada.api.public import router as public_router
 from escalada.api.ops import router as ops_router
 from escalada.api.podium import router as podium_router
 from escalada.api.save_ranking import router as save_ranking_router
-from escalada.security import admin_session, license_events, usb_license
+from escalada.security import (
+    admin_license,
+    admin_session,
+    license_events,
+    recovery_codes,
+    usb_license,
+)
 from escalada.routers.upload import router as upload_router
 from escalada.rate_limit import cleanup_rate_limit_data
 from escalada import runtime_paths, runtime_state
@@ -142,6 +152,15 @@ async def lifespan(app: FastAPI):
 
     # -------------------- Startup --------------------
     logger.info("🚀 Escalada API starting up (JSON-only)...")
+    try:
+        admin_license_status = admin_license.check_admin_license(force_refresh=True)
+        logger.info(
+            "Admin license status: valid=%s reason=%s",
+            bool(admin_license_status.get("valid")),
+            admin_license_status.get("reason"),
+        )
+    except Exception as exc:
+        logger.warning("Admin license status check failed: %s", exc)
 
     # Best-effort state preload (allows restarts to pick up where the event left off).
     try:
@@ -211,14 +230,27 @@ async def lifespan(app: FastAPI):
                     )
                     previous_valid = current_valid
 
-                if not current_valid and await admin_session.is_unlocked():
+                admin_license_status = admin_license.check_admin_license()
+                override_active = recovery_codes.is_override_active()
+                should_lock_unlocked_session = (
+                    not current_valid and not override_active
+                ) or not admin_license_status.get("valid")
+                if should_lock_unlocked_session and await admin_session.is_unlocked():
                     locked = await admin_session.lock()
                     if locked:
+                        lock_reason = (
+                            "admin_license_invalid"
+                            if not admin_license_status.get("valid")
+                            else "license_invalid"
+                        )
                         await license_events.publish(
                             "admin_locked",
                             {
-                                "reason": "license_invalid",
+                                "reason": lock_reason,
                                 "license_reason": status.get("reason"),
+                                "admin_license_reason": admin_license_status.get(
+                                    "reason"
+                                ),
                             },
                         )
             except asyncio.CancelledError:
@@ -278,7 +310,9 @@ app = FastAPI(
 
 # -------------------- CORS --------------------
 # Default origins cover local dev + typical LAN deployments; can be overridden via env vars.
-DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3000,http://192.168.100.205:5173"
+DEFAULT_ORIGINS = (
+    "http://localhost:5173,http://localhost:3000,http://192.168.100.205:5173"
+)
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS).split(",")
 
 # Regex allows *.local and common private LAN IP ranges (useful for phones/tablets/TV browsers).
@@ -358,8 +392,10 @@ async def status_summary():
 @app.get("/api/runtime")
 async def runtime_info(request: Request):
     state = runtime_state.get_runtime()
-    selected_port = state.get("port") or request.url.port or int(
-        os.getenv("ESCALADA_RUNTIME_PORT", "8000")
+    selected_port = (
+        state.get("port")
+        or request.url.port
+        or int(os.getenv("ESCALADA_RUNTIME_PORT", "8000"))
     )
     bind_host = state.get("host") or os.getenv("ESCALADA_RUNTIME_HOST", "0.0.0.0")
     request_host = request.headers.get("host", "")

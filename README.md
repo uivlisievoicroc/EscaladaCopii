@@ -40,38 +40,74 @@ Admin endpoints no longer use username/password login.
 
 Do not expose the API publicly without network protections (reverse proxy allowlists, VPN, firewall), because trusted IPs bypass admin login.
 
-## USB admin security (Lock/Unlock)
+## Admin Security (USB + Emergency Recovery + Offline License)
 
-Admin actions now require a second local factor (USB key) in addition to existing RBAC/JWT checks.
+Admin actions use Policy A:
+
+`admin_unlocked && admin_license_valid && (usb_license_valid || recovery_override_active)`
+
+Judge/public flows are unchanged.
 
 - `USB_LICENSE_SECRET` (required for valid USB checks)
-  - If missing, backend still starts, but license status is reported as `misconfigured` and admin USB unlock cannot succeed.
+  - If missing, backend still starts, but USB status is `misconfigured` and USB checks fail.
 - `USB_WATCHDOG_INTERVAL_SEC` (optional, default `5`)
-  - Background watchdog interval for auto-lock when USB license becomes invalid.
+  - Background watchdog for lock safety.
+- `ESCALADA_SECRETS_DIR/admin_license.jwt`
+  - Offline Ed25519-signed JWT required for admin flows.
+- `ESCALADA_SECRETS_DIR/recovery_codes.json`
+  - Hash-only one-time recovery codes and emergency override state.
 
-### New endpoints
+### Security endpoints
 
 - `GET /api/license/status`
-  - Returns `license_valid`, `license_reason`, `admin_unlocked` (and non-sensitive metadata).
+  - Returns USB status, unlock state, admin license status, and recovery override status:
+    `admin_license_valid`, `admin_license_reason`, `admin_license_expires_at`,
+    `admin_license_in_grace`, `admin_license_grace_until`, `admin_license_id`,
+    `recovery_override_active`, `recovery_override_until`, `recovery_codes_remaining`.
 - `POST /api/admin/unlock`
   - Requires admin RBAC.
-  - Validates USB license and issues an in-memory USB admin session token.
-  - Returns `403` with `{"code":"LICENSE_REQUIRED"}` when USB is missing/invalid.
+  - Requires valid admin license.
+  - Unlock succeeds when `(USB valid OR recovery override active)`.
 - `POST /api/admin/lock`
   - Requires admin RBAC.
-  - Revokes the USB admin session token immediately.
+  - Revokes the admin unlock token immediately.
+- `POST /api/admin/recovery/consume`
+  - Requires admin RBAC + trusted admin IP.
+  - Requires valid admin license.
+  - Consumes one recovery code one-time and activates override for 24h.
+  - Errors: `RECOVERY_CODE_INVALID`, `OVERRIDE_ALREADY_ACTIVE`, `RECOVERY_RATE_LIMIT`.
 - `GET /api/license/events` (SSE)
   - Emits `license_status_changed` and `admin_locked`.
 
-### Enforcement model
+### Emergency recovery behavior
 
-- All `/api/admin/*` routes require:
-  - admin RBAC, and
-  - valid USB admin session token in `Authorization: Bearer <usb_admin_token>`, and
-  - currently valid USB license.
-- `POST /api/save_ranking` also requires USB admin lock.
-- `POST /api/cmd` enforces USB admin lock only for admin callers and mutating command types; judge flow remains unaffected.
-- If USB is removed while unlocked, watchdog auto-locks in at most `USB_WATCHDOG_INTERVAL_SEC`.
+- One-time codes are stored hashed only (never plaintext).
+- Override TTL is fixed at 24h and is not auto-extended when already active.
+- Brute-force protection:
+  - Rate limit: max 5 attempts / 5 min / IP (in-memory, resets on server restart).
+  - Incremental backoff on invalid attempts.
+- Audit logging records outcome + IP + timestamp + `code_id` (when available), never the code itself.
+
+### Provisioning admin license JWT
+
+Issue a signed license file from an offline trusted machine:
+
+```bash
+poetry run python tools/issue_admin_license.py \
+  --private-key /path/to/ed25519_private.pem \
+  --expires-at 2026-12-31T23:59:59Z \
+  --kid default
+```
+
+The tool writes `admin_license.jwt` in `ESCALADA_SECRETS_DIR` by default.
+
+### Generate recovery codes
+
+```bash
+poetry run python tools/generate_recovery_codes.py
+```
+
+The tool prints codes once (`PRINT THESE ON PAPER`) and writes only hashes to `recovery_codes.json`.
 
 ### Provisioning `competition.key` on USB
 

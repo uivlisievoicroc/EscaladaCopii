@@ -28,7 +28,13 @@ from fastapi.security import OAuth2PasswordBearer
 
 # -------------------- Local application imports --------------------
 from escalada.auth.service import decode_token
-from escalada.security import admin_session, license_events, usb_license
+from escalada.security import (
+    admin_license,
+    admin_session,
+    license_events,
+    recovery_codes,
+    usb_license,
+)
 
 # psutil is an optional dependency here; we use it for robust local interface IP discovery.
 try:
@@ -204,7 +210,10 @@ def require_role(allowed: Iterable[str]):
         async def endpoint(claims=Depends(require_role(["admin"]))):
             ...
     """
-    async def checker(claims: Dict[str, Any] = Depends(get_current_claims)) -> Dict[str, Any]:
+
+    async def checker(
+        claims: Dict[str, Any] = Depends(get_current_claims),
+    ) -> Dict[str, Any]:
         role = claims.get("role")
         if role not in allowed:
             raise HTTPException(
@@ -222,7 +231,7 @@ def _extract_bearer_token(authorization_header: str | None) -> str | None:
     prefix = "Bearer "
     if not authorization_header.startswith(prefix):
         return None
-    token = authorization_header[len(prefix):].strip()
+    token = authorization_header[len(prefix) :].strip()
     return token or None
 
 
@@ -237,8 +246,28 @@ async def _enforce_admin_usb_security(request: Request) -> None:
             },
         )
 
+    admin_license_status = admin_license.check_admin_license()
+    if not admin_license_status.get("valid"):
+        was_locked = await admin_session.lock()
+        if was_locked:
+            await license_events.publish(
+                "admin_locked",
+                {
+                    "reason": "admin_license_invalid",
+                    "admin_license_reason": admin_license_status.get("reason"),
+                },
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "ADMIN_LICENSE_REQUIRED",
+                "reason": admin_license_status.get("reason"),
+            },
+        )
+
     license_status = usb_license.check_license()
-    if not license_status.get("valid"):
+    override_active = recovery_codes.is_override_active()
+    if not license_status.get("valid") and not override_active:
         was_locked = await admin_session.lock()
         if was_locked:
             await license_events.publish(
