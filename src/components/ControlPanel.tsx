@@ -3590,7 +3590,8 @@ const ControlPanel: FC = () => {
       if (err instanceof Error && err.message === 'security_locked') {
         setJudgePasswordStatus({
           type: 'error',
-          message: 'Admin actions are locked. Connect USB key and press Unlock.',
+          message:
+            'Admin actions are locked. Connect USB key or activate Emergency Recovery, then press Unlock.',
         });
         return;
       }
@@ -3872,16 +3873,38 @@ const ControlPanel: FC = () => {
     judgeAccessBoxId != null ? listboxes[judgeAccessBoxId] : null;
   const judgeAccessSelected = judgeAccessBoxId != null && !!judgeAccessBox;
   const judgeAccessEnabled = listboxes.length > 0;
-  const { adminUnlocked, licenseValid, licenseReason } = useAdminSecurity();
-  const adminActionsLocked = !adminUnlocked || !licenseValid;
+  const {
+    adminUnlocked,
+    licenseValid,
+    licenseReason,
+    adminLicenseValid,
+    adminLicenseReason,
+    recoveryOverrideActive,
+    recoveryOverrideUntil,
+  } = useAdminSecurity();
+  const adminActionsLocked =
+    !adminUnlocked || !adminLicenseValid || (!licenseValid && !recoveryOverrideActive);
   const adminLockedBanner =
-    'Acțiunile de administrator sunt blocate. Conectează cheia USB și apasă Unlock.';
+    'Acțiunile de administrator sunt blocate. Conectează cheia USB sau activează Emergency Recovery, apoi apasă Unlock.';
+  const formatDateTime = (value: string | null): string => {
+    if (!value) return 'unknown time';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString();
+  };
+  const emergencyOverrideBanner = recoveryOverrideActive
+    ? `EMERGENCY OVERRIDE ACTIVE until ${formatDateTime(recoveryOverrideUntil)} (USB bypass for admin).`
+    : null;
   const isAdminSecurityError = (error: unknown): boolean => {
     const errorCode =
       error && typeof error === 'object' && 'code' in error
         ? (error as { code?: unknown }).code
         : null;
-    return errorCode === 'LICENSE_REQUIRED' || errorCode === 'ADMIN_SESSION_REQUIRED';
+    return (
+      errorCode === 'LICENSE_REQUIRED' ||
+      errorCode === 'ADMIN_SESSION_REQUIRED' ||
+      errorCode === 'ADMIN_LICENSE_REQUIRED'
+    );
   };
   const ensureAdminActionsUnlocked = (): boolean => {
     if (!adminActionsLocked) return true;
@@ -3917,10 +3940,17 @@ const ControlPanel: FC = () => {
           <SecurityControls />
         </div>
 
+        {emergencyOverrideBanner && (
+          <div className={styles.modalAlert} style={{ marginBottom: '12px' }}>
+            {emergencyOverrideBanner}
+          </div>
+        )}
+
         {adminActionsLocked && (
           <div className={styles.modalAlert} style={{ marginBottom: '12px' }}>
             {adminLockedBanner}
-            {licenseReason ? ` (${licenseReason})` : ''}
+            {!adminLicenseValid ? ` (admin_license: ${adminLicenseReason})` : ''}
+            {!licenseValid && !recoveryOverrideActive ? ` (usb: ${licenseReason})` : ''}
           </div>
         )}
 

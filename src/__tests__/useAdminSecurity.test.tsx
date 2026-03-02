@@ -59,13 +59,44 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+function securityStatus(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    license_valid: true,
+    license_reason: 'ok',
+    admin_unlocked: false,
+    admin_license_valid: true,
+    admin_license_reason: 'ok',
+    admin_license_expires_at: '2026-12-31T23:59:59Z',
+    admin_license_in_grace: false,
+    admin_license_grace_until: '2027-01-01T23:59:59Z',
+    admin_license_id: 'lic-test',
+    recovery_override_active: false,
+    recovery_override_until: null,
+    recovery_codes_remaining: 20,
+    ...overrides,
+  };
+}
+
 const Probe: React.FC = () => {
-  const { licenseValid, licenseReason, adminUnlocked, unlock, lock, refreshStatus } =
-    useAdminSecurity();
+  const {
+    licenseValid,
+    licenseReason,
+    adminLicenseValid,
+    recoveryOverrideActive,
+    recoveryCodesRemaining,
+    adminUnlocked,
+    unlock,
+    lock,
+    refreshStatus,
+    consumeRecoveryCode,
+  } = useAdminSecurity();
   return (
     <div>
       <span data-testid="license-valid">{String(licenseValid)}</span>
       <span data-testid="license-reason">{licenseReason}</span>
+      <span data-testid="admin-license-valid">{String(adminLicenseValid)}</span>
+      <span data-testid="recovery-active">{String(recoveryOverrideActive)}</span>
+      <span data-testid="recovery-remaining">{String(recoveryCodesRemaining)}</span>
       <span data-testid="admin-unlocked">{String(adminUnlocked)}</span>
       <button type="button" onClick={() => void refreshStatus()}>
         refresh
@@ -75,6 +106,9 @@ const Probe: React.FC = () => {
       </button>
       <button type="button" onClick={() => void lock()}>
         lock
+      </button>
+      <button type="button" onClick={() => void consumeRecoveryCode('ABCD-EFGH-JKLM-NPQR')}>
+        activate
       </button>
     </div>
   );
@@ -98,26 +132,16 @@ describe('useAdminSecurity', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/license/status')) {
-        return jsonResponse({
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: false,
-        });
+        return jsonResponse(securityStatus());
       }
       if (url.endsWith('/api/admin/unlock')) {
         return jsonResponse({
           token: 'usb-token-123',
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: true,
+          ...securityStatus({ admin_unlocked: true }),
         });
       }
       if (url.endsWith('/api/admin/lock')) {
-        return jsonResponse({
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: false,
-        });
+        return jsonResponse(securityStatus({ admin_unlocked: false }));
       }
       throw new Error(`Unexpected URL ${url}`);
     });
@@ -131,6 +155,9 @@ describe('useAdminSecurity', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('license-valid')).toHaveTextContent('true');
+      expect(screen.getByTestId('admin-license-valid')).toHaveTextContent('true');
+      expect(screen.getByTestId('recovery-active')).toHaveTextContent('false');
+      expect(screen.getByTestId('recovery-remaining')).toHaveTextContent('20');
       expect(screen.getByTestId('admin-unlocked')).toHaveTextContent('false');
     });
 
@@ -147,30 +174,75 @@ describe('useAdminSecurity', () => {
     expect(sessionStorage.getItem(ADMIN_SECURITY_TOKEN_KEY)).toBeNull();
   });
 
-  it('locks locally when SSE emits admin_locked', async () => {
+  it('updates recovery override state after successful consume', async () => {
+    const overrideUntil = '2026-03-03T12:00:00Z';
+    let overrideActive = false;
+
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/license/status')) {
+        return jsonResponse(
+          securityStatus({
+            recovery_override_active: overrideActive,
+            recovery_override_until: overrideActive ? overrideUntil : null,
+            recovery_codes_remaining: overrideActive ? 19 : 20,
+          }),
+        );
+      }
+      if (url.endsWith('/api/admin/recovery/consume')) {
+        overrideActive = true;
         return jsonResponse({
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: false,
+          ok: true,
+          override_until: overrideUntil,
+          remaining: 19,
         });
       }
       if (url.endsWith('/api/admin/unlock')) {
         return jsonResponse({
-          token: 'usb-token-456',
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: true,
+          token: 'usb-token-override',
+          ...securityStatus({ admin_unlocked: true }),
         });
       }
       if (url.endsWith('/api/admin/lock')) {
+        return jsonResponse(securityStatus({ admin_unlocked: false }));
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    render(
+      <AdminSecurityProvider>
+        <Probe />
+      </AdminSecurityProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('recovery-active')).toHaveTextContent('false');
+      expect(screen.getByTestId('recovery-remaining')).toHaveTextContent('20');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'activate' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('recovery-active')).toHaveTextContent('true');
+      expect(screen.getByTestId('recovery-remaining')).toHaveTextContent('19');
+    });
+  });
+
+  it('locks locally when SSE emits admin_locked', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/license/status')) {
+        return jsonResponse(securityStatus());
+      }
+      if (url.endsWith('/api/admin/unlock')) {
         return jsonResponse({
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: false,
+          token: 'usb-token-456',
+          ...securityStatus({ admin_unlocked: true }),
         });
+      }
+      if (url.endsWith('/api/admin/lock')) {
+        return jsonResponse(securityStatus({ admin_unlocked: false }));
       }
       throw new Error(`Unexpected URL ${url}`);
     });
@@ -213,26 +285,16 @@ describe('useAdminSecurity', () => {
       const url = String(input);
       if (url.endsWith('/api/license/status')) {
         statusCalls += 1;
-        return jsonResponse({
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: false,
-        });
+        return jsonResponse(securityStatus());
       }
       if (url.endsWith('/api/admin/unlock')) {
         return jsonResponse({
           token: 'usb-token-polling',
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: true,
+          ...securityStatus({ admin_unlocked: true }),
         });
       }
       if (url.endsWith('/api/admin/lock')) {
-        return jsonResponse({
-          license_valid: true,
-          license_reason: 'ok',
-          admin_unlocked: false,
-        });
+        return jsonResponse(securityStatus({ admin_unlocked: false }));
       }
       throw new Error(`Unexpected URL ${url}`);
     });

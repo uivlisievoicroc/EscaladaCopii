@@ -28,6 +28,15 @@ vi.mock('../utilis/useAdminSecurity', () => ({
   useAdminSecurity: () => ({
     licenseValid: true,
     licenseReason: 'ok',
+    adminLicenseValid: true,
+    adminLicenseReason: 'ok',
+    adminLicenseExpiresAt: null,
+    adminLicenseInGrace: false,
+    adminLicenseGraceUntil: null,
+    adminLicenseId: 'lic-test',
+    recoveryOverrideActive: false,
+    recoveryOverrideUntil: null,
+    recoveryCodesRemaining: 20,
     adminUnlocked: true,
     adminToken: 'test-usb-token',
     sseConnected: true,
@@ -35,6 +44,7 @@ vi.mock('../utilis/useAdminSecurity', () => ({
     refreshStatus: vi.fn(),
     unlock: vi.fn(),
     lock: vi.fn(),
+    consumeRecoveryCode: vi.fn(),
   }),
   AdminSecurityProvider: ({ children }) => <>{children}</>,
 }));

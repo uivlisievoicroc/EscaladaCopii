@@ -10,8 +10,10 @@ import React, {
 import {
   ADMIN_SECURITY_FORCE_LOCK_EVENT,
   clearAdminSecurityToken,
+  consumeRecoveryCode as consumeRecoveryCodeApi,
   forceAdminSecurityLock,
   getAdminSecurityToken,
+  LicenseStatus,
   lockAdminSecurity,
   refreshAdminSecurityStatus,
   unlockAdminSecurity,
@@ -22,6 +24,15 @@ const API_BASE = '';
 type AdminSecurityContextValue = {
   licenseValid: boolean;
   licenseReason: string;
+  adminLicenseValid: boolean;
+  adminLicenseReason: string;
+  adminLicenseExpiresAt: string | null;
+  adminLicenseInGrace: boolean;
+  adminLicenseGraceUntil: string | null;
+  adminLicenseId: string | null;
+  recoveryOverrideActive: boolean;
+  recoveryOverrideUntil: string | null;
+  recoveryCodesRemaining: number;
   adminUnlocked: boolean;
   adminToken: string | null;
   sseConnected: boolean;
@@ -29,6 +40,7 @@ type AdminSecurityContextValue = {
   refreshStatus: () => Promise<void>;
   unlock: () => Promise<void>;
   lock: () => Promise<void>;
+  consumeRecoveryCode: (code: string) => Promise<void>;
 };
 
 const AdminSecurityContext = createContext<AdminSecurityContextValue | null>(null);
@@ -40,6 +52,15 @@ export const AdminSecurityProvider: React.FC<{ children: React.ReactNode }> = ({
 }) => {
   const [licenseValid, setLicenseValid] = useState<boolean>(false);
   const [licenseReason, setLicenseReason] = useState<string>(DEFAULT_LOCK_REASON);
+  const [adminLicenseValid, setAdminLicenseValid] = useState<boolean>(false);
+  const [adminLicenseReason, setAdminLicenseReason] = useState<string>('not_checked');
+  const [adminLicenseExpiresAt, setAdminLicenseExpiresAt] = useState<string | null>(null);
+  const [adminLicenseInGrace, setAdminLicenseInGrace] = useState<boolean>(false);
+  const [adminLicenseGraceUntil, setAdminLicenseGraceUntil] = useState<string | null>(null);
+  const [adminLicenseId, setAdminLicenseId] = useState<string | null>(null);
+  const [recoveryOverrideActive, setRecoveryOverrideActive] = useState<boolean>(false);
+  const [recoveryOverrideUntil, setRecoveryOverrideUntil] = useState<string | null>(null);
+  const [recoveryCodesRemaining, setRecoveryCodesRemaining] = useState<number>(0);
   const [adminUnlocked, setAdminUnlocked] = useState<boolean>(false);
   const [adminToken, setAdminToken] = useState<string | null>(() => getAdminSecurityToken());
   const [sseConnected, setSseConnected] = useState<boolean>(false);
@@ -55,13 +76,18 @@ export const AdminSecurityProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const applyStatus = useCallback(
-    (status: {
-      license_valid: boolean;
-      license_reason: string;
-      admin_unlocked: boolean;
-    }) => {
+    (status: LicenseStatus) => {
       setLicenseValid(!!status.license_valid);
       setLicenseReason(status.license_reason || 'error');
+      setAdminLicenseValid(!!status.admin_license_valid);
+      setAdminLicenseReason(status.admin_license_reason || 'error');
+      setAdminLicenseExpiresAt(status.admin_license_expires_at ?? null);
+      setAdminLicenseInGrace(!!status.admin_license_in_grace);
+      setAdminLicenseGraceUntil(status.admin_license_grace_until ?? null);
+      setAdminLicenseId(status.admin_license_id ?? null);
+      setRecoveryOverrideActive(!!status.recovery_override_active);
+      setRecoveryOverrideUntil(status.recovery_override_until ?? null);
+      setRecoveryCodesRemaining(Number(status.recovery_codes_remaining || 0));
       if (status.admin_unlocked) {
         setAdminUnlocked(true);
         setAdminToken(getAdminSecurityToken());
@@ -106,6 +132,20 @@ export const AdminSecurityProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [applyStatus, setLockedLocal]);
 
+  const consumeRecoveryCode = useCallback(
+    async (code: string) => {
+      setLoading(true);
+      try {
+        await consumeRecoveryCodeApi(code);
+        const status = await refreshAdminSecurityStatus();
+        applyStatus(status);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyStatus],
+  );
+
   useEffect(() => {
     const onForceLock = (event: Event) => {
       const customEvent = event as CustomEvent<{ reason?: string }>;
@@ -143,6 +183,33 @@ export const AdminSecurityProvider: React.FC<{ children: React.ReactNode }> = ({
           if (!data.admin_unlocked) {
             setLockedLocal(reason || 'locked');
           }
+        }
+        if (typeof data.admin_license_valid === 'boolean') {
+          setAdminLicenseValid(data.admin_license_valid);
+        }
+        if (typeof data.admin_license_reason === 'string') {
+          setAdminLicenseReason(data.admin_license_reason || 'error');
+        }
+        if (typeof data.admin_license_expires_at === 'string') {
+          setAdminLicenseExpiresAt(data.admin_license_expires_at);
+        }
+        if (typeof data.admin_license_in_grace === 'boolean') {
+          setAdminLicenseInGrace(data.admin_license_in_grace);
+        }
+        if (typeof data.admin_license_grace_until === 'string') {
+          setAdminLicenseGraceUntil(data.admin_license_grace_until);
+        }
+        if (typeof data.admin_license_id === 'string') {
+          setAdminLicenseId(data.admin_license_id);
+        }
+        if (typeof data.recovery_override_active === 'boolean') {
+          setRecoveryOverrideActive(data.recovery_override_active);
+        }
+        if (typeof data.recovery_override_until === 'string') {
+          setRecoveryOverrideUntil(data.recovery_override_until);
+        }
+        if (typeof data.recovery_codes_remaining === 'number') {
+          setRecoveryCodesRemaining(Number(data.recovery_codes_remaining || 0));
         }
       } catch {
         // ignore malformed events
@@ -210,16 +277,35 @@ export const AdminSecurityProvider: React.FC<{ children: React.ReactNode }> = ({
       licenseValid,
       licenseReason,
       adminUnlocked,
+      adminLicenseValid,
+      adminLicenseReason,
+      adminLicenseExpiresAt,
+      adminLicenseInGrace,
+      adminLicenseGraceUntil,
+      adminLicenseId,
+      recoveryOverrideActive,
+      recoveryOverrideUntil,
+      recoveryCodesRemaining,
       adminToken,
       sseConnected,
       loading,
       refreshStatus,
       unlock,
       lock,
+      consumeRecoveryCode,
     }),
     [
       licenseValid,
       licenseReason,
+      adminLicenseValid,
+      adminLicenseReason,
+      adminLicenseExpiresAt,
+      adminLicenseInGrace,
+      adminLicenseGraceUntil,
+      adminLicenseId,
+      recoveryOverrideActive,
+      recoveryOverrideUntil,
+      recoveryCodesRemaining,
       adminUnlocked,
       adminToken,
       sseConnected,
@@ -227,6 +313,7 @@ export const AdminSecurityProvider: React.FC<{ children: React.ReactNode }> = ({
       refreshStatus,
       unlock,
       lock,
+      consumeRecoveryCode,
     ],
   );
 
