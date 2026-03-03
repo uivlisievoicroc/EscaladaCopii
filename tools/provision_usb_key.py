@@ -20,6 +20,7 @@ except Exception as exc:  # pragma: no cover - runtime guard
     sys.exit(1)
 
 from escalada.security.usb_license import build_expected_key
+from escalada.security.usb_license import canonicalize_fs_name
 
 
 def _normalize_mountpoint(value: str) -> str:
@@ -95,7 +96,7 @@ def main() -> int:
         print(f"Error: cannot read disk usage for `{partition.mountpoint}` ({exc}).", file=sys.stderr)
         return 1
 
-    fs_name = (partition.fstype or "").strip()
+    fs_name = canonicalize_fs_name(partition.fstype)
     total_bytes = int(usage.total)
     expected_key = build_expected_key(
         fs_name=fs_name,

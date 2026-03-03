@@ -64,6 +64,47 @@ def test_check_license_valid_signature(monkeypatch):
     assert result["mountpoint"] == mountpoint
 
 
+def test_check_license_accepts_fstype_aliases(monkeypatch):
+    mountpoint = "/media/test-usb"
+    windows_fs_name = "FAT32"
+    macos_fs_name = "msdos"
+    total_bytes = 64 * 1024 * 1024
+    secret = "unit-test-secret"
+
+    partition = SimpleNamespace(mountpoint=mountpoint, fstype=windows_fs_name)
+    fake_psutil = SimpleNamespace(
+        disk_partitions=lambda all=False: [partition],
+        disk_usage=lambda _mountpoint: SimpleNamespace(total=total_bytes),
+    )
+
+    expected = usb_license.build_expected_key(
+        fs_name=macos_fs_name,
+        total_bytes=total_bytes,
+        secret=secret,
+    )
+
+    monkeypatch.setenv("USB_LICENSE_SECRET", secret)
+    monkeypatch.setattr(usb_license, "psutil", fake_psutil)
+    monkeypatch.setattr(usb_license, "_is_candidate_partition", lambda _part: True)
+
+    def fake_is_file(path: Path) -> bool:
+        return str(path) == f"{mountpoint}/competition.key"
+
+    def fake_read_text(path: Path, encoding: str = "utf-8") -> str:
+        if str(path) == f"{mountpoint}/competition.key":
+            return expected
+        raise FileNotFoundError(str(path))
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file, raising=False)
+    monkeypatch.setattr(Path, "read_text", fake_read_text, raising=False)
+
+    result = usb_license.check_license(force_refresh=True)
+
+    assert result["valid"] is True
+    assert result["reason"] == "ok"
+    assert result["mountpoint"] == mountpoint
+
+
 def test_check_license_invalid_signature(monkeypatch):
     mountpoint = "/media/test-usb"
     fs_name = "vfat"

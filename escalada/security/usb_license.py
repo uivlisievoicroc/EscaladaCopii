@@ -23,6 +23,14 @@ _cache_lock = Lock()
 _cached_result: "LicenseStatus | None" = None
 _cached_at_monotonic = 0.0
 
+_FSTYPE_ALIASES_BY_CANONICAL: dict[str, tuple[str, ...]] = {
+    # FAT32 shows up as `msdos` on macOS, `vfat` on Linux, and `FAT32` on Windows.
+    "fat32": ("fat32", "vfat", "msdos", "fat"),
+    "exfat": ("exfat",),
+    # Some Linux setups report NTFS volumes as `fuseblk`.
+    "ntfs": ("ntfs", "ntfs3", "fuseblk"),
+}
+
 
 class LicenseStatus(TypedDict):
     valid: bool
@@ -93,6 +101,51 @@ def _get_usb_license_secret() -> str:
 
 def _js_like_round(value: float) -> int:
     return int(value + 0.5)
+
+
+def canonicalize_fs_name(fs_name: str | None) -> str:
+    """
+    Canonicalize filesystem type names across OSes.
+
+    This is used to make `competition.key` portable between macOS/Windows/Linux.
+    """
+    raw = (fs_name or "").strip().lower()
+    if not raw:
+        return ""
+    if raw in {"fat32", "vfat", "msdos", "fat"}:
+        return "fat32"
+    if raw.startswith("exfat"):
+        return "exfat"
+    if raw in {"ntfs", "ntfs3", "fuseblk"}:
+        return "ntfs"
+    return raw
+
+
+def _fs_name_candidates(fs_name: str | None) -> list[str]:
+    """Return fs type candidates to preserve backward compatibility with old provisioned keys."""
+    raw = (fs_name or "").strip()
+    lowered = raw.lower() if raw else ""
+    canonical = canonicalize_fs_name(raw)
+
+    candidates: list[str] = []
+
+    def _add(value: str) -> None:
+        normalized = (value or "").strip()
+        if not normalized:
+            return
+        if normalized not in candidates:
+            candidates.append(normalized)
+
+    if raw:
+        _add(raw)
+    if lowered:
+        _add(lowered)
+    if canonical:
+        _add(canonical)
+        for alias in _FSTYPE_ALIASES_BY_CANONICAL.get(canonical, ()):
+            _add(alias)
+
+    return candidates
 
 
 def build_expected_key(*, fs_name: str, total_bytes: int, secret: str) -> str:
@@ -181,9 +234,14 @@ def _scan_license() -> LicenseStatus:
             file_content = key_path.read_text(encoding="utf-8").strip()
             fs_name = (partition.fstype or "").strip()
             total_bytes = int(psutil.disk_usage(mountpoint).total)
-            expected = build_expected_key(fs_name=fs_name, total_bytes=total_bytes, secret=secret)
-            if hmac.compare_digest(file_content.lower(), expected.lower()):
-                return _build_status(True, "ok", mountpoint)
+            for fs_candidate in _fs_name_candidates(fs_name):
+                expected = build_expected_key(
+                    fs_name=fs_candidate,
+                    total_bytes=total_bytes,
+                    secret=secret,
+                )
+                if hmac.compare_digest(file_content.lower(), expected.lower()):
+                    return _build_status(True, "ok", mountpoint)
             found_invalid_signature = True
         except Exception:
             continue
