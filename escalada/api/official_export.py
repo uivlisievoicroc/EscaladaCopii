@@ -117,7 +117,7 @@ def _build_route_df(
     Ranking is score-descending, then name ascending for stable output. We compute:
     - `Rank`: 1..N with ties (same score => same rank number)
     - `Points`: average of the tied positions (e.g., tie for 2nd/3rd => (2+3)/2 = 2.5)
-    - `Time`: formatted time column (optional; currently display-only)
+    - `Time`: formatted time column (optional; shown when time criterion is enabled)
     """
     route_entries: list[tuple[str, float | None, int | None]] = []
     for name, arr in (scores or {}).items():
@@ -189,7 +189,7 @@ def _build_route_df(
             "Points": points.get(name),
         }
         if use_time_tiebreak:
-            # Legacy flag: currently display-only (no time-based tie-breaking here).
+            # Time criterion gates the tiebreak workflow and time column rendering.
             row["Time"] = _format_time(tm)
         row["TB"] = tb_label(
             bool((tb_time_flags or {}).get(name)),
@@ -248,7 +248,7 @@ def build_official_results_zip(snapshot: dict[str, Any]) -> bytes:
     if route_count <= 0:
         raise ValueError("missing_routes_count")
 
-    # Legacy flag: controls time column display only (no tie-breaking).
+    # Time criterion gates the tiebreak workflow and time column rendering.
     use_time = bool(snapshot.get("timeCriterionEnabled"))
 
     # `RankingIn` is shared with other exports; we reuse the same overall builder for consistency.

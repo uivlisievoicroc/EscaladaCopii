@@ -109,15 +109,16 @@ def merge_persistent_tiebreak_badges(
             continue
         prev_flags = badges.get(name) if isinstance(badges.get(name), dict) else {}
         next_prev = bool(prev_flags.get("tb_prev")) or bool(row.get("tb_prev"))
-        next_time = bool(prev_flags.get("tb_time")) or bool(row.get("tb_time"))
         prev_helper = _sanitize_prev_helper(prev_flags.get("tb_prev_helper"))
         row_helper = _sanitize_prev_helper(row.get("tb_prev_helper"))
         next_helper = row_helper or prev_helper
-        if next_prev or next_time:
-            next_payload = {"tb_prev": next_prev, "tb_time": next_time}
-            if next_prev and next_helper:
+        if next_prev:
+            next_payload = {"tb_prev": True}
+            if next_helper:
                 next_payload["tb_prev_helper"] = next_helper
             badges[name] = next_payload
+        elif name in badges:
+            del badges[name]
 
     merged_rows: list[dict] = []
     for row in rows:
@@ -129,8 +130,6 @@ def merge_persistent_tiebreak_badges(
             flags = badges.get(name) if isinstance(badges.get(name), dict) else {}
             if bool(flags.get("tb_prev")):
                 merged["tb_prev"] = True
-            if bool(flags.get("tb_time")):
-                merged["tb_time"] = True
             if bool(flags.get("tb_prev")) and _sanitize_prev_helper(merged.get("tb_prev_helper")) is None:
                 helper = _sanitize_prev_helper(flags.get("tb_prev_helper"))
                 if helper:
@@ -163,13 +162,14 @@ def build_public_box_state(
     routes_count = int(routes_count or route_index or 1)
     scores_by_name = state.get("scores") or {}
     times_by_name = state.get("times") or {}
+    time_criterion_enabled = bool(state.get("timeCriterionEnabled", False))
     tiebreak_state = resolve_rankings_with_time_tiebreak(
         scores=scores_by_name,
         times=times_by_name,
         route_count=routes_count,
         active_route_index=route_index,
         box_id=box_id,
-        time_criterion_enabled=bool(state.get("timeCriterionEnabled", False)),
+        time_criterion_enabled=time_criterion_enabled,
         active_holds_count=state.get("holdsCount")
         if isinstance(state.get("holdsCount"), int)
         else None,
@@ -183,10 +183,14 @@ def build_public_box_state(
         resolved_fingerprint=state.get("timeTiebreakResolvedFingerprint"),
         resolved_decision=state.get("timeTiebreakResolvedDecision"),
     )
-    merged_lead_rows = merge_persistent_tiebreak_badges(
-        state,
-        route_index,
-        tiebreak_state.get("lead_ranking_rows") or [],
+    merged_lead_rows = (
+        merge_persistent_tiebreak_badges(
+            state,
+            route_index,
+            tiebreak_state.get("lead_ranking_rows") or [],
+        )
+        if time_criterion_enabled
+        else (tiebreak_state.get("lead_ranking_rows") or [])
     )
     return {
         "boxId": box_id,
@@ -241,13 +245,14 @@ def build_snapshot(
     routes_count = int(state.get("routesCount") or route_index or 1)
     scores_by_name = state.get("scores") or {}
     times_by_name = state.get("times") or {}
+    time_criterion_enabled = bool(state.get("timeCriterionEnabled", False))
     tiebreak_state = resolve_rankings_with_time_tiebreak(
         scores=scores_by_name,
         times=times_by_name,
         route_count=routes_count,
         active_route_index=route_index,
         box_id=box_id,
-        time_criterion_enabled=bool(state.get("timeCriterionEnabled", False)),
+        time_criterion_enabled=time_criterion_enabled,
         active_holds_count=state.get("holdsCount")
         if isinstance(state.get("holdsCount"), int)
         else None,
@@ -261,10 +266,14 @@ def build_snapshot(
         resolved_fingerprint=state.get("timeTiebreakResolvedFingerprint"),
         resolved_decision=state.get("timeTiebreakResolvedDecision"),
     )
-    merged_lead_rows = merge_persistent_tiebreak_badges(
-        state,
-        route_index,
-        tiebreak_state.get("lead_ranking_rows") or [],
+    merged_lead_rows = (
+        merge_persistent_tiebreak_badges(
+            state,
+            route_index,
+            tiebreak_state.get("lead_ranking_rows") or [],
+        )
+        if time_criterion_enabled
+        else (tiebreak_state.get("lead_ranking_rows") or [])
     )
     officials = get_competition_officials()
     return {

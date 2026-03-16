@@ -107,7 +107,7 @@ def test_three_way_partial_previous_rounds_then_time_for_subgroup():
     assert [row["rank"] for row in resolved["overall_rows"][:3]] == [1, 2, 3]
 
 
-def test_non_podium_tie_stays_shared_and_is_not_exposed_for_resolution():
+def test_non_podium_tie_requires_previous_rounds_when_time_criterion_is_on():
     result = _ctx(
         scores={
             "Ana": [10.0],
@@ -125,8 +125,23 @@ def test_non_podium_tie_stays_shared_and_is_not_exposed_for_resolution():
         },
     )
     assert result["has_eligible_tie"] is True
+    assert result["is_resolved"] is False
+    assert len(result["eligible_groups"]) == 1
+    assert result["eligible_groups"][0]["stage"] == "previous_rounds"
+    assert result["eligible_groups"][0]["affects_podium"] is False
+    assert result["eligible_groups"][0]["status"] == "pending"
+
+
+def test_time_criterion_off_disables_all_tiebreak_logic():
+    result = _ctx(time_criterion_enabled=False)
+    rows = {row["name"]: row for row in result["overall_rows"]}
+    assert result["has_eligible_tie"] is False
     assert result["is_resolved"] is True
     assert result["eligible_groups"] == []
+    assert rows["Ana"]["rank"] == 1
+    assert rows["Bob"]["rank"] == 1
+    assert rows["Ana"]["tb_prev"] is False
+    assert rows["Ana"]["tb_time"] is False
 
 
 def test_invalid_previous_rounds_input_reports_error():
@@ -143,7 +158,7 @@ def test_invalid_previous_rounds_input_reports_error():
     assert rows["Bob"]["rank"] == 2
 
 
-def test_old_podium_decision_does_not_split_when_tie_moves_below_podium():
+def test_old_podium_decision_becomes_pending_when_tie_moves_below_podium():
     initial = _ctx(
         scores={"Top": [40.0], "Ana": [30.0], "Bob": [30.0]},
         times={"Top": [80], "Ana": [100], "Bob": [120]},
@@ -185,9 +200,13 @@ def test_old_podium_decision_does_not_split_when_tie_moves_below_podium():
     moved_by_name = {row["name"]: row for row in moved["overall_rows"]}
     assert moved_by_name["Ana"]["rank"] == 4
     assert moved_by_name["Bob"]["rank"] == 4
+    assert moved["is_resolved"] is False
+    pending_prev = [ev for ev in moved["eligible_groups"] if ev["stage"] == "previous_rounds"]
+    assert pending_prev
+    assert pending_prev[0]["affects_podium"] is False
 
 
-def test_tail_below_podium_collapses_when_tie_group_spans_3_4_5():
+def test_previous_rounds_split_is_kept_when_tie_group_spans_3_4_5():
     initial = _ctx(
         scores={"Top": [40.0], "Second": [39.0], "Ana": [30.0], "Bob": [30.0], "Cara": [30.0]},
         times={"Top": [80], "Second": [85], "Ana": [100], "Bob": [110], "Cara": [120]},
@@ -206,7 +225,7 @@ def test_tail_below_podium_collapses_when_tie_group_spans_3_4_5():
     rows = {row["name"]: row for row in resolved["overall_rows"]}
     assert rows["Ana"]["rank"] == 3
     assert rows["Bob"]["rank"] == 4
-    assert rows["Cara"]["rank"] == 4
+    assert rows["Cara"]["rank"] == 5
 
 
 def test_incremental_prev_rounds_memory_keeps_existing_split_when_tie_expands():
@@ -244,6 +263,27 @@ def test_incremental_prev_rounds_memory_keeps_existing_split_when_tie_expands():
     assert pending_prev[0]["known_prev_ranks_by_name"] == {"Ana": 1, "Bob": 2}
     assert pending_prev[0]["missing_prev_rounds_members"] == ["Cris"]
     assert pending_prev[0]["requires_prev_rounds_input"] is True
+
+
+def test_identical_podium_times_keep_shared_rank_after_time_tiebreak():
+    initial = _ctx(
+        scores={"Ana": [10.0], "Bob": [10.0], "Cris": [8.0]},
+        times={"Ana": [120], "Bob": [120], "Cris": [150]},
+    )
+    fp = initial["eligible_groups"][0]["fingerprint"]
+    resolved = _ctx(
+        scores={"Ana": [10.0], "Bob": [10.0], "Cris": [8.0]},
+        times={"Ana": [120], "Bob": [120], "Cris": [150]},
+        prev_resolved_decisions={fp: "no"},
+        resolved_decisions={fp: "yes"},
+    )
+    rows = {row["name"]: row for row in resolved["overall_rows"]}
+    assert resolved["is_resolved"] is True
+    assert resolved["errors"] == []
+    assert rows["Ana"]["rank"] == 1
+    assert rows["Bob"]["rank"] == 1
+    assert rows["Ana"]["tb_time"] is True
+    assert rows["Bob"]["tb_time"] is True
 
 
 def test_overall_uses_geometric_mean_for_multi_route_no_tie():
@@ -341,7 +381,7 @@ def test_gm_top3_tie_requires_prev_then_time_resolution():
     assert rows["Ana"]["tb_time"] is True
 
 
-def test_gm_tie_outside_podium_remains_shared_without_prompt():
+def test_gm_tie_outside_podium_requires_previous_rounds_when_enabled():
     result = resolve_rankings_with_time_tiebreak(
         scores={
             "A": [50.0, 50.0],
@@ -357,13 +397,16 @@ def test_gm_tie_outside_podium_remains_shared_without_prompt():
         time_criterion_enabled=True,
     )
     assert result["has_eligible_tie"] is True
-    assert result["eligible_groups"] == []
+    assert result["is_resolved"] is False
+    assert len(result["eligible_groups"]) == 1
+    assert result["eligible_groups"][0]["stage"] == "previous_rounds"
+    assert result["eligible_groups"][0]["affects_podium"] is False
     by_name = {row["name"]: row for row in result["overall_rows"]}
     assert by_name["D"]["rank"] == 4
     assert by_name["E"]["rank"] == 4
 
 
-def test_resolved_gm_podium_tie_collapses_to_shared_when_dropped_below_top3():
+def test_resolved_gm_podium_tie_becomes_pending_when_dropped_below_top3():
     initial = resolve_rankings_with_time_tiebreak(
         scores={"Ana": [100.0, 90.0], "Bob": [90.0, 100.0], "Cris": [80.0, 80.0]},
         times={"Ana": [100, 100], "Bob": [120, 120], "Cris": [140, 140]},
@@ -409,3 +452,7 @@ def test_resolved_gm_podium_tie_collapses_to_shared_when_dropped_below_top3():
     moved_by_name = {row["name"]: row for row in moved["overall_rows"]}
     assert moved_by_name["Ana"]["rank"] == 4
     assert moved_by_name["Bob"]["rank"] == 4
+    assert moved["is_resolved"] is False
+    pending_prev = [ev for ev in moved["eligible_groups"] if ev["stage"] == "previous_rounds"]
+    assert pending_prev
+    assert pending_prev[0]["affects_podium"] is False

@@ -13,14 +13,23 @@ This repo runs in **JSON storage mode only** (no Postgres/Docker).
 ## Quick Start
 
 ```bash
+cd ../escalada-ui
+npm install
+npm run build
+
+cd ../escalada-api
 poetry install
 poetry run pip install -e ../escalada-core
 
+export ESCALADA_FRONTEND_DIST=../escalada-ui/dist
 export STORAGE_DIR=./data
 # Optional: keep state across restarts
 # export RESET_BOXES_ON_START=0
 poetry run uvicorn escalada.main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
+
+Backend startup logs the frontend bundle path and build marker. For live testing on `:8000`,
+serve the current UI build, not a separate Vite dev server on another port.
 
 ## Production Safety Checks
 

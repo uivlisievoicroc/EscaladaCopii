@@ -10,8 +10,8 @@ It also exposes helper functions (`_build_overall_df`, `_df_to_pdf`, `_to_second
 are reused by other export features (e.g. official ZIP exports).
 
 Important:
-- The `use_time_tiebreak` flag is currently **display-only** (adds a Time column). Ranking is
-  based on score; ties are handled by assigning the average of the tied positions.
+- The `use_time_tiebreak` flag enables the ranking tiebreak workflow used by live/export flows.
+- When disabled, ties stay shared; when enabled, previous-rounds/time decisions can affect ranking.
 """
 
 # -------------------- Standard library imports --------------------
@@ -66,9 +66,9 @@ class RankingIn(BaseModel):
     clubs: dict[str, str] = {}
     include_clubs: bool = False
     times: dict[str, list[float | None]] | None = None
-    # Legacy flag: controls Time column display only (no time-based tie-breaking).
+    # Enables the ranking tiebreak workflow and time column display.
     use_time_tiebreak: bool = False
-    # Current active route index (1-based), used for top-3 route-context tiebreak.
+    # Current active route index (1-based), used for active-route tie-break context.
     route_index: int | None = None
     holds_counts: list[int] | None = None
     active_holds_count: int | None = None
@@ -106,7 +106,7 @@ def save_ranking(payload: RankingIn, claims=Depends(require_admin_action)):
     raw_times = payload.times or {}
     # Normalize all times to seconds (int) or None so rendering is consistent.
     times = {name: [_to_seconds(t) for t in arr] for name, arr in raw_times.items()}
-    # Legacy flag: controls time column display only (no tie-breaking).
+    # Drives both time-column display and tie-break activation.
     use_time = payload.use_time_tiebreak
     active_route_index = payload.route_index or payload.route_count
     derived_holds_count = payload.active_holds_count

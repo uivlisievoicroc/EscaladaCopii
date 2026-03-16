@@ -1,7 +1,7 @@
 from escalada.api.live import _merge_persistent_tiebreak_badges
 
 
-def test_tiebreak_badges_are_preserved_when_athlete_drops_below_podium():
+def test_tb_time_badge_is_not_preserved_when_athlete_drops_below_podium():
     state = {"initiated": True}
 
     first_rows = _merge_persistent_tiebreak_badges(
@@ -24,7 +24,7 @@ def test_tiebreak_badges_are_preserved_when_athlete_drops_below_podium():
         ],
     )
     assert later_rows[0]["tb_prev"] is True
-    assert later_rows[1]["tb_time"] is True
+    assert later_rows[1].get("tb_time") is not True
 
 
 def test_tiebreak_badges_reset_on_route_change():

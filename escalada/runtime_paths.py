@@ -80,11 +80,28 @@ def resolve_frontend_dist_dir() -> Path:
         if packaged.exists():
             return packaged
 
+    workspace_dist = Path(__file__).resolve().parents[2] / "escalada-ui" / "dist"
+    if workspace_dist.exists():
+        return workspace_dist.resolve()
+
     source_dir = Path(__file__).resolve().parents[1] / "frontend_dist"
     if source_dir.exists():
         return source_dir
 
     return source_dir
+
+
+def read_frontend_build_info(dist_dir: Path) -> dict[str, Any] | None:
+    info_path = dist_dir / "build-info.json"
+    if not info_path.exists():
+        return None
+    try:
+        payload = json.loads(info_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
 
 
 def _ensure_unique_legacy_target(path: Path, stamp: str) -> Path:

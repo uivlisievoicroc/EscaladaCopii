@@ -152,6 +152,22 @@ async def lifespan(app: FastAPI):
 
     # -------------------- Startup --------------------
     logger.info("🚀 Escalada API starting up (JSON-only)...")
+    frontend_build_info = runtime_paths.read_frontend_build_info(FRONTEND_DIST_DIR)
+    if frontend_build_info:
+        logger.info(
+            "Serving frontend bundle from %s (marker=%s version=%s source_hash=%s built_at=%s)",
+            FRONTEND_DIST_DIR,
+            frontend_build_info.get("marker"),
+            frontend_build_info.get("version"),
+            frontend_build_info.get("sourceHash"),
+            frontend_build_info.get("builtAt"),
+        )
+    else:
+        logger.warning(
+            "Serving frontend bundle from %s without build-info.json. "
+            "Rebuild escalada-ui and/or set ESCALADA_FRONTEND_DIST to the current dist directory.",
+            FRONTEND_DIST_DIR,
+        )
     try:
         admin_license_status = admin_license.check_admin_license(force_refresh=True)
         logger.info(

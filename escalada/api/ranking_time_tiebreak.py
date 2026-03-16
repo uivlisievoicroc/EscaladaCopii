@@ -775,7 +775,8 @@ def resolve_rankings_with_time_tiebreak(
         gm_totals=gm_totals,
         active_results=active_results,
     )
-    has_eligible_tie = bool(gm_tie_groups)
+    tiebreak_enabled = bool(time_criterion_enabled)
+    has_eligible_tie = bool(gm_tie_groups) if tiebreak_enabled else False
     event_fp = _event_global_fingerprint(
         box_id=box_id,
         route_index=active_route_norm,
@@ -836,7 +837,7 @@ def resolve_rankings_with_time_tiebreak(
             "errors": [],
         }
 
-    if not bool(time_criterion_enabled):
+    if not tiebreak_enabled:
         overall_rows: list[dict[str, Any]] = []
         i = 0
         rank = 1
@@ -881,8 +882,8 @@ def resolve_rankings_with_time_tiebreak(
             "prev_ranks_by_fingerprint": normalized_prev_ranks,
             "prev_lineage_ranks_by_key": normalized_prev_lineage_ranks,
             "resolved_decisions": normalized_time_decisions,
-            "fingerprint": event_fp,
-            "has_eligible_tie": has_eligible_tie,
+            "fingerprint": None,
+            "has_eligible_tie": False,
             "is_resolved": True,
             "errors": [],
         }
@@ -931,6 +932,7 @@ def resolve_rankings_with_time_tiebreak(
         tie_break_resolver=resolver,
         podium_places=3,
         round_name=f"Final|overall_gm|routes:{route_count_norm}|active:{active_route_norm}",
+        tiebreak_enabled=tiebreak_enabled,
     )
 
     tb_prev_helpers_by_name: dict[str, dict[str, Any]] = {}
