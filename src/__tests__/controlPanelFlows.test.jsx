@@ -95,6 +95,56 @@ function seedLocalStorageForTwoBoxes() {
   });
 }
 
+function buildPrevRoundsPendingEvent({
+  rank = 4,
+  fingerprint = `tb-prev-r${rank}`,
+  members = [
+    { name: 'Ana', time: 91.2, value: 2.0 },
+    { name: 'Maria', time: 92.7, value: 2.0 },
+  ],
+  missingPrevRoundsMembers = members.map((member) => member.name),
+} = {}) {
+  return {
+    context: 'overall',
+    rank,
+    members,
+    fingerprint,
+    stage: 'previous_rounds',
+    affects_podium: rank <= 3,
+    status: 'pending',
+    detail: 'previous_rounds_pending',
+    requires_prev_rounds_input: true,
+    missing_prev_rounds_members: missingPrevRoundsMembers,
+    is_resolved: false,
+  };
+}
+
+async function emitControlPanelSnapshot(boxId, snapshot) {
+  const getWsForBox = () => {
+    for (let idx = global.WebSocket.mock.calls.length - 1; idx >= 0; idx -= 1) {
+      const [url] = global.WebSocket.mock.calls[idx] || [];
+      if (String(url).endsWith(`/api/ws/${boxId}`)) {
+        return global.WebSocket.mock.results[idx]?.value ?? null;
+      }
+    }
+    return null;
+  };
+
+  await waitFor(() => {
+    expect(getWsForBox()?.onmessage).toBeTypeOf('function');
+  });
+  const ws = getWsForBox();
+  await act(async () => {
+    ws.onmessage({
+      data: JSON.stringify({
+        type: 'STATE_SNAPSHOT',
+        boxId,
+        ...snapshot,
+      }),
+    });
+  });
+}
+
 describe('ControlPanel button flows', () => {
   beforeEach(() => {
     // reset mocks
@@ -263,6 +313,315 @@ describe('ControlPanel button flows', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByText('Tie-break overview')).not.toBeInTheDocument();
+  });
+
+  it('shows TB Prev modal for unresolved non-podium ties from state snapshot', async () => {
+    const pendingGroup = buildPrevRoundsPendingEvent({
+      fingerprint: 'tb-prev-r4',
+      members: [
+        { name: 'Ana', time: 91.2, value: 2.0 },
+        { name: 'Maria', time: 92.7, value: 2.0 },
+      ],
+      missingPrevRoundsMembers: ['Ana', 'Maria'],
+    });
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/state/0')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-0',
+            boxVersion: 3,
+            timeCriterionEnabled: true,
+            timeTiebreakHasEligibleTie: true,
+            leadRankingResolved: false,
+            leadTieEvents: [pendingGroup],
+          }),
+        };
+      }
+      if (String(url).includes('/api/state/1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-1',
+            boxVersion: 1,
+            timeCriterionEnabled: true,
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <ControlPanel />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(
+      await screen.findByText(/Set previous-round rank for each newly tied athlete/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm TB Prev' })).toBeInTheDocument();
+  });
+
+  it('reopens pending non-podium TB Prev from Show Tie-breaks without stacking duplicates', async () => {
+    const pendingGroup = buildPrevRoundsPendingEvent({
+      fingerprint: 'tb-prev-r4-reopen',
+      members: [
+        { name: 'Ana', time: 61, value: 4.743 },
+        { name: 'Preda Emilia', time: 63, value: 4.743 },
+      ],
+      missingPrevRoundsMembers: ['Ana', 'Preda Emilia'],
+    });
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/state/0')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-0',
+            boxVersion: 3,
+            timeCriterionEnabled: true,
+            timeTiebreakHasEligibleTie: true,
+            leadRankingResolved: false,
+            leadTieEvents: [pendingGroup],
+          }),
+        };
+      }
+      if (String(url).includes('/api/state/1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-1',
+            boxVersion: 1,
+            timeCriterionEnabled: true,
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <ControlPanel />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(
+      await screen.findByText(/Set previous-round rank for each newly tied athlete/i),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Set previous-round rank for each newly tied athlete/i),
+      ).not.toBeInTheDocument();
+    });
+
+    await openActionsSection();
+    const showButtons = await screen.findAllByRole('button', { name: 'Show Tie-breaks' });
+    fireEvent.click(showButtons[0]);
+
+    expect(await screen.findByText('Tie-break overview')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resolve now' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve now' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Tie-break overview')).not.toBeInTheDocument();
+    });
+    expect(
+      await screen.findByText(/Set previous-round rank for each newly tied athlete/i),
+    ).toBeInTheDocument();
+    expect((await screen.findAllByText('Preda Emilia')).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Set previous-round rank for each newly tied athlete/i),
+      ).not.toBeInTheDocument();
+    });
+
+    const showButtonsAgain = await screen.findAllByRole('button', { name: 'Show Tie-breaks' });
+    fireEvent.click(showButtonsAgain[0]);
+    expect(await screen.findByText('Tie-break overview')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve now' }));
+    expect(
+      await screen.findByText(/Set previous-round rank for each newly tied athlete/i),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Set previous-round rank for each newly tied athlete/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('opens the correct pending request from Show Tie-breaks when multiple TB Prev events exist', async () => {
+    const firstGroup = buildPrevRoundsPendingEvent({
+      rank: 4,
+      fingerprint: 'tb-prev-r4-multi',
+      members: [
+        { name: 'Ana', time: 91.2, value: 2.0 },
+        { name: 'Maria', time: 92.7, value: 2.0 },
+      ],
+      missingPrevRoundsMembers: ['Ana', 'Maria'],
+    });
+    const secondGroup = buildPrevRoundsPendingEvent({
+      rank: 6,
+      fingerprint: 'tb-prev-r6-multi',
+      members: [
+        { name: 'Ioana', time: 81.2, value: 6.0 },
+        { name: 'Sara', time: 82.7, value: 6.0 },
+      ],
+      missingPrevRoundsMembers: ['Ioana', 'Sara'],
+    });
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/state/0')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-0',
+            boxVersion: 3,
+            timeCriterionEnabled: true,
+            timeTiebreakHasEligibleTie: true,
+            leadRankingResolved: false,
+            leadTieEvents: [firstGroup, secondGroup],
+          }),
+        };
+      }
+      if (String(url).includes('/api/state/1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-1',
+            boxVersion: 1,
+            timeCriterionEnabled: true,
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <ControlPanel />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(
+      await screen.findByText(/Set previous-round rank for each newly tied athlete/i),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    expect((await screen.findAllByText('Ioana')).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Set previous-round rank for each newly tied athlete/i),
+      ).not.toBeInTheDocument();
+    });
+
+    await openActionsSection();
+    const showButtons = await screen.findAllByRole('button', { name: 'Show Tie-breaks' });
+    fireEvent.click(showButtons[0]);
+    expect(await screen.findByText('Tie-break overview')).toBeInTheDocument();
+
+    const resolveButtons = screen.getAllByRole('button', { name: 'Resolve now' });
+    expect(resolveButtons).toHaveLength(2);
+    fireEvent.click(resolveButtons[1]);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Tie-break overview')).not.toBeInTheDocument();
+    });
+    expect((await screen.findAllByText('Ioana')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('Sara')).length).toBeGreaterThan(0);
+  });
+
+  it('marks history-only pending TB Prev items as non-actionable in Show Tie-breaks', async () => {
+    const pendingGroup = buildPrevRoundsPendingEvent({
+      fingerprint: 'tb-prev-r4-history',
+      members: [
+        { name: 'Ana Fîntîneanu', time: 1, value: 4.743 },
+        { name: 'Preda Emilia', time: 3, value: 4.743 },
+      ],
+      missingPrevRoundsMembers: ['Ana Fîntîneanu', 'Preda Emilia'],
+    });
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/state/0')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-0',
+            boxVersion: 3,
+            timeCriterionEnabled: true,
+            timeTiebreakHasEligibleTie: true,
+            leadRankingResolved: false,
+            leadTieEvents: [pendingGroup],
+          }),
+        };
+      }
+      if (String(url).includes('/api/state/1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-1',
+            boxVersion: 1,
+            timeCriterionEnabled: true,
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <ControlPanel />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(
+      await screen.findByText(/Set previous-round rank for each newly tied athlete/i),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Set previous-round rank for each newly tied athlete/i),
+      ).not.toBeInTheDocument();
+    });
+
+    await emitControlPanelSnapshot(0, {
+      sessionId: 'sid-0',
+      boxVersion: 4,
+      timeCriterionEnabled: true,
+      timeTiebreakHasEligibleTie: false,
+      leadRankingResolved: true,
+      leadTieEvents: [],
+    });
+
+    await openActionsSection();
+    const showButtons = await screen.findAllByRole('button', { name: 'Show Tie-breaks' });
+    fireEvent.click(showButtons[0]);
+    expect(await screen.findByText('Tie-break overview')).toBeInTheDocument();
+    expect(screen.getByText('Overall rank #4')).toBeInTheDocument();
+    expect(
+      screen.getByText('Historical event; not currently actionable.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resolve now' })).not.toBeInTheDocument();
   });
 
   it('submits SUBMIT_SCORE using competitor from backend state', async () => {

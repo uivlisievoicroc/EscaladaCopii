@@ -41,6 +41,14 @@ type LoginOverlayProps = {
 };
 
 const TypedLoginOverlay = LoginOverlay as unknown as React.ComponentType<LoginOverlayProps>;
+const HALF_HOLD_SHORTCUT_KEYS = new Set(['AudioVolumeUp', 'VolumeUp', 'ArrowUp']);
+const FULL_HOLD_SHORTCUT_KEYS = new Set(['AudioVolumeDown', 'VolumeDown', 'ArrowDown']);
+
+const resolveJudgeShortcutAction = (key: string): 'halfHold' | 'hold' | null => {
+  if (HALF_HOLD_SHORTCUT_KEYS.has(key)) return 'halfHold';
+  if (FULL_HOLD_SHORTCUT_KEYS.has(key)) return 'hold';
+  return null;
+};
 
 const JudgePage: FC = () => {
   // NOTE: This page runs during live events; verbose logs help diagnose LAN/WS issues quickly.
@@ -802,6 +810,9 @@ const JudgePage: FC = () => {
   const handleHoldClick = async () => {
     const max = Number(maxScore ?? 0);
     const current = Number(holdCount ?? 0);
+    if (!initiated || !isRunning) {
+      return;
+    }
     if (max > 0 && current >= max) {
       return;
     }
@@ -832,6 +843,9 @@ const JudgePage: FC = () => {
   const handleHalfHoldClick = async () => {
     const max = Number(maxScore ?? 0);
     const current = Number(holdCount ?? 0);
+    if (!initiated || !isRunning || usedHalfHold) {
+      return;
+    }
     if (max > 0 && current >= max) {
       return;
     }
@@ -865,6 +879,33 @@ const JudgePage: FC = () => {
     setScoreSubmitError(null);
     setShowScoreModal(true);
   };
+
+  useEffect(() => {
+    if (!authActive || isInitialLoading || showLogin || showScoreModal) return;
+
+    const handleJudgeShortcut = (event: KeyboardEvent): void => {
+      const action = resolveJudgeShortcutAction(event.key);
+      if (!action) return;
+
+      event.preventDefault();
+      if (event.repeat) {
+        debugLog('⌨️ [JudgePage] Ignoring repeated shortcut:', event.key);
+        return;
+      }
+
+      if (action === 'halfHold') {
+        debugLog('⌨️ [JudgePage] Shortcut mapped to +0.1 Hold:', event.key);
+        void handleHalfHoldClick();
+        return;
+      }
+
+      debugLog('⌨️ [JudgePage] Shortcut mapped to +1 Hold:', event.key);
+      void handleHoldClick();
+    };
+
+    window.addEventListener('keydown', handleJudgeShortcut);
+    return () => window.removeEventListener('keydown', handleJudgeShortcut);
+  }, [authActive, isInitialLoading, showLogin, showScoreModal, handleHalfHoldClick, handleHoldClick]);
 
   // -------------------- Derived values for rendering --------------------
   // Compute labels, progress %, and display-friendly timer values outside of JSX.

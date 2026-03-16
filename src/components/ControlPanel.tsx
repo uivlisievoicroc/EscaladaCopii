@@ -63,6 +63,7 @@ import {
 } from '../utilis/adminSecurityService';
 import { useAdminSecurity } from '../utilis/useAdminSecurity';
 import { downloadOfficialResultsZip } from '../utilis/backup';
+import { APP_BUILD_INFO } from '../utilis/buildInfo';
 
 // Map `boxId -> Window` for any opened ContestPage tabs (used for focus/close and best-effort UI sync).
 const openTabs: { [boxId: number]: Window | null } = {};
@@ -464,14 +465,7 @@ const ControlPanel: FC = () => {
     if (!enabled) {
       clearRegisteredTime(boxId);
       clearPrevRoundsDraftsForBox(boxId);
-      setTimeTiebreakPromptQueue((prev) => {
-        const removed = prev.filter((prompt) => prompt.boxId === boxId);
-        removed.forEach((prompt) => {
-          const key = promptFingerprintKey(prompt.stage, prompt.fingerprint, boxId);
-          delete promptedTimeTiebreakFingerprintsRef.current[key];
-        });
-        return prev.filter((prompt) => prompt.boxId !== boxId);
-      });
+      setTimeTiebreakPromptQueue((prev) => removePromptsForBox(prev, boxId));
     }
   };
 
@@ -530,6 +524,103 @@ const ControlPanel: FC = () => {
     boxId: number,
   ): string => `${boxId}:${stage}:${fingerprint}`;
 
+  const promptStageForGroup = (
+    group: Pick<TimeTiebreakEligibleGroup, 'stage'>,
+  ): TimeTiebreakPromptStage => (group.stage === 'time' ? 'time' : 'previous-rounds');
+
+  const buildTimeTiebreakPrompt = (
+    boxId: number,
+    group: TimeTiebreakEligibleGroup | null | undefined,
+  ): TimeTiebreakPrompt | null => {
+    if (!group?.fingerprint) return null;
+    return {
+      boxId,
+      fingerprint: group.fingerprint,
+      stage: promptStageForGroup(group),
+      group,
+    };
+  };
+
+  const syncPromptedTiebreakFingerprints = (queue: TimeTiebreakPrompt[]): void => {
+    const nextPromptedFingerprints: Record<string, boolean> = {};
+    queue.forEach((prompt) => {
+      nextPromptedFingerprints[
+        promptFingerprintKey(prompt.stage, prompt.fingerprint, prompt.boxId)
+      ] = true;
+    });
+    promptedTimeTiebreakFingerprintsRef.current = nextPromptedFingerprints;
+  };
+
+  const dedupeTimeTiebreakPrompts = (queue: TimeTiebreakPrompt[]): TimeTiebreakPrompt[] => {
+    const seen = new Set<string>();
+    return queue.filter((prompt) => {
+      if (!prompt?.fingerprint) return false;
+      const key = promptFingerprintKey(prompt.stage, prompt.fingerprint, prompt.boxId);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const removePromptsForBox = (
+    queue: TimeTiebreakPrompt[],
+    boxId: number,
+  ): TimeTiebreakPrompt[] => {
+    const nextQueue = dedupeTimeTiebreakPrompts(
+      queue.filter((prompt) => prompt.boxId !== boxId),
+    );
+    syncPromptedTiebreakFingerprints(nextQueue);
+    return nextQueue;
+  };
+
+  const replacePromptsForBox = (
+    queue: TimeTiebreakPrompt[],
+    boxId: number,
+    prompts: TimeTiebreakPrompt[],
+  ): TimeTiebreakPrompt[] => {
+    const promptsForOtherBoxes = queue.filter((prompt) => prompt.boxId !== boxId);
+    const nextQueue = dedupeTimeTiebreakPrompts([...promptsForOtherBoxes, ...prompts]);
+    syncPromptedTiebreakFingerprints(nextQueue);
+    return nextQueue;
+  };
+
+  const upsertTimeTiebreakPrompt = (
+    queue: TimeTiebreakPrompt[],
+    prompt: TimeTiebreakPrompt,
+    opts: { toFront?: boolean } = {},
+  ): TimeTiebreakPrompt[] => {
+    const promptKey = promptFingerprintKey(prompt.stage, prompt.fingerprint, prompt.boxId);
+    const filteredQueue = queue.filter(
+      (existingPrompt) =>
+        promptFingerprintKey(
+          existingPrompt.stage,
+          existingPrompt.fingerprint,
+          existingPrompt.boxId,
+        ) !== promptKey,
+    );
+    const nextQueue = dedupeTimeTiebreakPrompts(
+      opts.toFront ? [prompt, ...filteredQueue] : [...filteredQueue, prompt],
+    );
+    syncPromptedTiebreakFingerprints(nextQueue);
+    return nextQueue;
+  };
+
+  const isPendingPreviousRoundsPrompt = (
+    group: TimeTiebreakEligibleGroup | null | undefined,
+  ): boolean => {
+    if (!group) return false;
+    const status =
+      group.status === 'resolved' || group.status === 'error' || group.status === 'pending'
+        ? group.status
+        : group.isResolved
+        ? 'resolved'
+        : 'pending';
+    return (
+      promptStageForGroup(group) === 'previous-rounds' &&
+      (status === 'pending' || !!group.requiresPrevRoundsInput)
+    );
+  };
+
   const mergeTieBreakHistoryGroups = (
     previous: TimeTiebreakEligibleGroup[],
     current: TimeTiebreakEligibleGroup[],
@@ -579,9 +670,9 @@ const ControlPanel: FC = () => {
           next = {
             ...next,
             stage: 'previous_rounds',
-            status: 'pending',
-            isResolved: false,
-            resolutionKind: null,
+            status: 'resolved',
+            isResolved: true,
+            resolutionKind: 'previous_rounds',
           };
         }
       }
@@ -626,27 +717,12 @@ const ControlPanel: FC = () => {
     });
   };
 
-  const enqueueTimeTiebreakPrompt = (prompt: TimeTiebreakPrompt): void => {
-    setTimeTiebreakPromptQueue((prev) => {
-      const exists = prev.find(
-        (item) =>
-          item.boxId === prompt.boxId &&
-          item.fingerprint === prompt.fingerprint,
-      );
-      if (exists) {
-        return prev.map((item) =>
-          item.boxId === prompt.boxId &&
-          item.fingerprint === prompt.fingerprint
-            ? { ...item, stage: prompt.stage, group: prompt.group }
-            : item,
-        );
-      }
-      return [...prev, prompt];
-    });
-  };
-
   const applyTimeTiebreakSnapshot = (boxId: number, msg: Record<string, unknown>): void => {
     const existingSnapshot = timeTiebreakByBox[boxId];
+    const criterionEnabled =
+      typeof msg.timeCriterionEnabled === 'boolean'
+        ? msg.timeCriterionEnabled
+        : getTimeCriterionEnabled(boxId);
     const preference = parseTimeTiebreakDecision(msg.timeTiebreakPreference);
     const resolvedDecision = parseTimeTiebreakDecision(msg.timeTiebreakResolvedDecision);
     const resolvedFingerprint =
@@ -904,32 +980,37 @@ const ControlPanel: FC = () => {
         } as TimeTiebreakEligibleGroup;
       })
       .filter((group) => group.fingerprint && group.members.length > 1);
-    const eligibleGroups = hasTieSnapshotPayload
-      ? parsedGroups
-      : existingSnapshot?.eligibleGroups ?? [];
+    const eligibleGroups = criterionEnabled
+      ? hasTieSnapshotPayload
+        ? parsedGroups
+        : existingSnapshot?.eligibleGroups ?? []
+      : [];
     const rankingRows = Array.isArray(msg.leadRankingRows)
       ? (msg.leadRankingRows as LeadRankingRowSnapshot[])
       : existingSnapshot?.rankingRows ?? [];
-    const currentFingerprint =
-      (typeof msg.timeTiebreakCurrentFingerprint === 'string'
-        ? msg.timeTiebreakCurrentFingerprint
-        : null) ||
-      (typeof msg.fingerprint === 'string' ? msg.fingerprint : null) ||
-      (hasTieSnapshotPayload ? null : existingSnapshot?.currentFingerprint ?? null);
-    const hasEligibleTie =
-      typeof msg.timeTiebreakHasEligibleTie === 'boolean'
+    const currentFingerprint = criterionEnabled
+      ? (typeof msg.timeTiebreakCurrentFingerprint === 'string'
+          ? msg.timeTiebreakCurrentFingerprint
+          : null) ||
+        (typeof msg.fingerprint === 'string' ? msg.fingerprint : null) ||
+        (hasTieSnapshotPayload ? null : existingSnapshot?.currentFingerprint ?? null)
+      : null;
+    const hasEligibleTie = criterionEnabled
+      ? typeof msg.timeTiebreakHasEligibleTie === 'boolean'
         ? msg.timeTiebreakHasEligibleTie
         : hasTieSnapshotPayload
         ? eligibleGroups.length > 0
-        : existingSnapshot?.hasEligibleTie ?? false;
-    const isResolved =
-      typeof msg.leadRankingResolved === 'boolean'
+        : existingSnapshot?.hasEligibleTie ?? false
+      : false;
+    const isResolved = criterionEnabled
+      ? typeof msg.leadRankingResolved === 'boolean'
         ? msg.leadRankingResolved
         : typeof msg.timeTiebreakIsResolved === 'boolean'
         ? msg.timeTiebreakIsResolved
         : hasTieSnapshotPayload
-        ? eligibleGroups.filter((g) => !!g.affectsPodium).every((g) => g.isResolved)
-        : existingSnapshot?.isResolved ?? true;
+        ? eligibleGroups.every((g) => g.isResolved)
+        : existingSnapshot?.isResolved ?? true
+      : true;
 
     setTimeTiebreakByBox((prev) => ({
       ...prev,
@@ -950,35 +1031,35 @@ const ControlPanel: FC = () => {
         hasEligibleTie,
         isResolved,
         eligibleGroups,
-        historyGroups: mergeTieBreakHistoryGroups(
-          prev[boxId]?.historyGroups ?? [],
-          eligibleGroups,
-          mergedPrevDecisions,
-          mergedDecisions,
-        ),
+        historyGroups: criterionEnabled
+          ? mergeTieBreakHistoryGroups(
+              prev[boxId]?.historyGroups ?? [],
+              eligibleGroups,
+              mergedPrevDecisions,
+              mergedDecisions,
+            )
+          : [],
         rankingRows,
       },
     }));
 
-    const criterionEnabled =
-      typeof msg.timeCriterionEnabled === 'boolean'
-        ? msg.timeCriterionEnabled
-        : getTimeCriterionEnabled(boxId);
     const shouldPrompt = criterionEnabled && hasEligibleTie;
     if (!shouldPrompt) {
-      setTimeTiebreakPromptQueue((prev) => {
-        const removed = prev.filter((prompt) => prompt.boxId === boxId);
-        removed.forEach((prompt) => {
-          const key = promptFingerprintKey(prompt.stage, prompt.fingerprint, boxId);
-          delete promptedTimeTiebreakFingerprintsRef.current[key];
-        });
-        return prev.filter((prompt) => prompt.boxId !== boxId);
+      Object.keys(autoTimeTiebreakNextAttemptAtRef.current).forEach((key) => {
+        if (key.startsWith(`${boxId}:`)) {
+          delete autoTimeTiebreakNextAttemptAtRef.current[key];
+        }
       });
+      Object.keys(autoTimeTiebreakInFlightRef.current).forEach((key) => {
+        if (key.startsWith(`${boxId}:`)) {
+          delete autoTimeTiebreakInFlightRef.current[key];
+        }
+      });
+      setTimeTiebreakPromptQueue((prev) => removePromptsForBox(prev, boxId));
       return;
     }
 
     const unresolvedGroups = eligibleGroups.filter((group) => !group.isResolved);
-    const unresolvedPodiumGroups = unresolvedGroups.filter((group) => !!group.affectsPodium);
     const unresolvedTimeGroups = unresolvedGroups.filter(
       (group) => group.stage === 'time' && !!group.affectsPodium,
     );
@@ -1012,28 +1093,33 @@ const ControlPanel: FC = () => {
       })();
     });
 
-    const unresolvedPromptGroups = unresolvedPodiumGroups.filter(
-      (group) => group.stage !== 'time',
-    );
-    setTimeTiebreakPromptQueue((prev) =>
-      prev.filter((prompt) =>
-        prompt.boxId !== boxId ||
-        unresolvedGroups.some((group) => group.fingerprint === prompt.fingerprint),
-      ),
-    );
-    unresolvedPromptGroups.forEach((group) => {
-      const stage: TimeTiebreakPromptStage = group.stage === 'time' ? 'time' : 'previous-rounds';
-      const promptKey = promptFingerprintKey(stage, group.fingerprint, boxId);
-      if (!promptedTimeTiebreakFingerprintsRef.current[promptKey]) {
-        promptedTimeTiebreakFingerprintsRef.current[promptKey] = true;
-      }
-      enqueueTimeTiebreakPrompt({
-        boxId,
-        fingerprint: group.fingerprint,
-        stage,
-        group,
+    const unresolvedPromptGroups = unresolvedGroups
+      .filter((group) => promptStageForGroup(group) !== 'time')
+      .sort((a, b) => {
+        if (a.rank !== b.rank) return a.rank - b.rank;
+        return a.fingerprint.localeCompare(b.fingerprint);
       });
-    });
+    const pendingNonPodiumPrevGroups = unresolvedPromptGroups.filter(
+      (group) => !group.affectsPodium,
+    );
+    if (pendingNonPodiumPrevGroups.length > 0) {
+      debugLog('[ControlPanel] Pending non-podium previous-rounds ties detected', {
+        boxId,
+        buildMarker: APP_BUILD_INFO.marker,
+        fingerprints: pendingNonPodiumPrevGroups.map((group) => group.fingerprint),
+      });
+    }
+    const nextPrompts = unresolvedPromptGroups
+      .map((group) => buildTimeTiebreakPrompt(boxId, group))
+      .filter((prompt): prompt is TimeTiebreakPrompt => !!prompt);
+    if (pendingNonPodiumPrevGroups.length > 0 && nextPrompts.length === 0) {
+      debugWarn('[ControlPanel] Snapshot contains non-podium previous-rounds ties but no prompts were queued', {
+        boxId,
+        buildMarker: APP_BUILD_INFO.marker,
+        eligibleGroups,
+      });
+    }
+    setTimeTiebreakPromptQueue((prev) => replacePromptsForBox(prev, boxId, nextPrompts));
   };
 
   const dismissActiveTimeTiebreakPrompt = (): void => {
@@ -1046,6 +1132,7 @@ const ControlPanel: FC = () => {
     ranksByName: Record<string, number> = {},
   ): Promise<void> => {
     if (!activeTimeTiebreakPrompt || activeTimeTiebreakPrompt.stage !== 'previous-rounds') return;
+    const criterionEnabled = getTimeCriterionEnabled(activeTimeTiebreakPrompt.boxId);
     const lineageKey =
       typeof activeTimeTiebreakPrompt.group?.lineageKey === 'string'
         ? activeTimeTiebreakPrompt.group.lineageKey
@@ -1118,13 +1205,14 @@ const ControlPanel: FC = () => {
                 isResolved: true,
               };
             }
+            const shouldAwaitTime = criterionEnabled && !!group.affectsPodium;
             return {
               ...group,
               prevRoundsDecision: 'no' as const,
               prevRoundsOrder: null,
               prevRoundsRanksByName: null,
-              isResolved: false,
-              resolutionKind: null,
+              isResolved: !shouldAwaitTime,
+              resolutionKind: shouldAwaitTime ? null : ('previous_rounds' as const),
             };
           }) ?? [];
         const nextHasEligibleTie = nextGroups.length > 0;
@@ -1287,6 +1375,10 @@ const ControlPanel: FC = () => {
   // - `sessionId` (isolates state between boxes)
   // - `boxVersion` (optimistic concurrency / stale detection)
   // - server-driven flags like `timeCriterionEnabled`
+  useEffect(() => {
+    debugLog('[ControlPanel] Frontend build info', APP_BUILD_INFO);
+  }, []);
+
   useEffect(() => {
     const config = getApiConfig();
     listboxes.forEach((_, idx) => {
@@ -1560,13 +1652,14 @@ const ControlPanel: FC = () => {
                           isResolved: true,
                         };
                       }
+                      const shouldAwaitTime = getTimeCriterionEnabled(idx) && !!group.affectsPodium;
                       return {
                         ...group,
                         prevRoundsDecision: 'no' as const,
                         prevRoundsOrder: null,
                         prevRoundsRanksByName: null,
-                        isResolved: false,
-                        resolutionKind: null,
+                        isResolved: !shouldAwaitTime,
+                        resolutionKind: shouldAwaitTime ? null : ('previous_rounds' as const),
                       };
                     }) ?? [];
                   return {
@@ -2395,13 +2488,7 @@ const ControlPanel: FC = () => {
           ...prompt,
           boxId: prompt.boxId > index ? prompt.boxId - 1 : prompt.boxId,
         }));
-      const nextPromptedFingerprints: Record<string, boolean> = {};
-      nextQueue.forEach((prompt) => {
-        nextPromptedFingerprints[
-          promptFingerprintKey(prompt.stage, prompt.fingerprint, prompt.boxId)
-        ] = true;
-      });
-      promptedTimeTiebreakFingerprintsRef.current = nextPromptedFingerprints;
+      syncPromptedTiebreakFingerprints(nextQueue);
       return nextQueue;
     });
     const remappedDrafts: Record<string, Record<string, string>> = {};
@@ -2563,20 +2650,7 @@ const ControlPanel: FC = () => {
         },
       }));
       setTimeTiebreakPromptQueue((prev) => {
-        const removedPromptKeys = new Set(
-          prev
-            .filter((prompt) => prompt.boxId === boxIdx)
-            .map((prompt) => promptFingerprintKey(prompt.stage, prompt.fingerprint, boxIdx)),
-        );
-        const groupsForBox = timeTiebreakByBox[boxIdx]?.eligibleGroups ?? [];
-        groupsForBox.forEach((group) => {
-          removedPromptKeys.add(promptFingerprintKey('previous-rounds', group.fingerprint, boxIdx));
-          removedPromptKeys.add(promptFingerprintKey('time', group.fingerprint, boxIdx));
-        });
-        removedPromptKeys.forEach((promptKey) => {
-          delete promptedTimeTiebreakFingerprintsRef.current[promptKey];
-        });
-        return prev.filter((prompt) => prompt.boxId !== boxIdx);
+        return removePromptsForBox(prev, boxIdx);
       });
       clearPrevRoundsDraftsForBox(boxIdx);
     }
@@ -3665,6 +3739,18 @@ const ControlPanel: FC = () => {
     setShowTieBreaksDialog(false);
   };
 
+  const openPendingPrevRoundsPrompt = (
+    boxId: number,
+    group: TimeTiebreakEligibleGroup | null | undefined,
+  ): void => {
+    const prompt = buildTimeTiebreakPrompt(boxId, group);
+    if (!prompt) return;
+    setShowTieBreaksDialog(false);
+    setTimeTiebreakPromptQueue((prev) =>
+      upsertTimeTiebreakPrompt(prev, prompt, { toFront: true }),
+    );
+  };
+
   // Copy the judge QR URL to clipboard (with a legacy fallback).
   const handleCopyQrUrl = async (): Promise<void> => {
     if (!adminQrUrl) return;
@@ -3828,6 +3914,18 @@ const ControlPanel: FC = () => {
   const showTieBreaksEnabled = scoringBoxSelected;
   const scoringTieBreakSnapshot =
     scoringBoxId != null ? timeTiebreakByBox[scoringBoxId] : undefined;
+  const scoringTieBreakEligibleGroups = Array.isArray(scoringTieBreakSnapshot?.eligibleGroups)
+    ? scoringTieBreakSnapshot.eligibleGroups
+    : [];
+  const scoringTieBreakEligibleByFingerprint = scoringTieBreakEligibleGroups.reduce(
+    (acc, group) => {
+      if (group?.fingerprint) {
+        acc[group.fingerprint] = group;
+      }
+      return acc;
+    },
+    {} as Record<string, TimeTiebreakEligibleGroup>,
+  );
   const scoringTieBreakGroups = Array.isArray(scoringTieBreakSnapshot?.historyGroups)
     ? scoringTieBreakSnapshot?.historyGroups
     : [];
@@ -4349,6 +4447,15 @@ const ControlPanel: FC = () => {
                             : 'pending';
                         const stageLabel = group.stage === 'time' ? 'TB Time' : 'TB Prev';
                         const contextLabel = group.context === 'route' ? 'Active route' : 'Overall';
+                        const actionableGroup =
+                          group.fingerprint
+                            ? scoringTieBreakEligibleByFingerprint[group.fingerprint]
+                            : undefined;
+                        const canResolveNow = isPendingPreviousRoundsPrompt(actionableGroup);
+                        const showHistoricalPendingNote =
+                          !canResolveNow &&
+                          status === 'pending' &&
+                          promptStageForGroup(group) === 'previous-rounds';
                         return (
                           <div
                             key={`tb-overview-${group.fingerprint}`}
@@ -4441,6 +4548,24 @@ const ControlPanel: FC = () => {
                             {group.requiresPrevRoundsInput && (
                               <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                                 Previous-rounds input required.
+                              </div>
+                            )}
+                            {showHistoricalPendingNote && (
+                              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                Historical event; not currently actionable.
+                              </div>
+                            )}
+                            {canResolveNow && scoringBoxId != null && (
+                              <div>
+                                <button
+                                  className="modern-btn modern-btn-primary"
+                                  onClick={() =>
+                                    openPendingPrevRoundsPrompt(scoringBoxId, actionableGroup)
+                                  }
+                                  type="button"
+                                >
+                                  Resolve now
+                                </button>
                               </div>
                             )}
                           </div>
@@ -4826,7 +4951,7 @@ const ControlPanel: FC = () => {
 	                  {timerDialogBoxId != null && listboxes[timerDialogBoxId] ? (
 	                    `Category: ${sanitizeBoxName(listboxes[timerDialogBoxId].categorie || `Box ${timerDialogBoxId}`)}`
 	                  ) : (
-	                    'Configure timer preset and top-3 time display.'
+	                    'Configure timer preset and time criterion.'
 	                  )}
 	                </div>
 	              </div>

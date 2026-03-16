@@ -9,10 +9,21 @@ npm install
 npm run dev
 ```
 
+For live admin/judge/public flows served by the backend on `:8000`:
+
+```bash
+npm run build
+# Optional: write the build directly into escalada-api/frontend_dist
+npm run build:api-dist
+```
+
+The backend can then serve the current UI build via `ESCALADA_FRONTEND_DIST=../escalada-ui/dist`.
+
 ## Tests
 
 ```bash
 npm test -- --run
+npm run smoke:build
 # E2E
 npx playwright test --reporter=list
 ```
