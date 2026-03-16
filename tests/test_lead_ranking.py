@@ -46,7 +46,36 @@ def test_compute_lead_ranking_no_ties():
     assert [row.rank for row in out.rows] == [1, 2, 3]
 
 
-def test_tie_outside_podium_can_stay_shared_rank():
+def test_tie_outside_podium_stays_shared_when_tiebreak_disabled():
+    athletes = [
+        Athlete(id="A", name="Ana"),
+        Athlete(id="B", name="Bob"),
+        Athlete(id="C", name="Cara"),
+        Athlete(id="D", name="Dan"),
+        Athlete(id="E", name="Ema"),
+    ]
+    results = {
+        "A": LeadResult(topped=True, hold=40, plus=False, time_seconds=100),
+        "B": LeadResult(topped=False, hold=39, plus=True, time_seconds=101),
+        "C": LeadResult(topped=False, hold=38, plus=True, time_seconds=102),
+        "D": LeadResult(topped=False, hold=30, plus=False, time_seconds=103),
+        "E": LeadResult(topped=False, hold=30, plus=False, time_seconds=104),
+    }
+    out = compute_lead_ranking(
+        athletes,
+        results,
+        tie_break_resolver=None,
+        podium_places=3,
+        tiebreak_enabled=False,
+    )
+    by_id = _rows_by_id(out)
+    assert out.is_resolved is True
+    assert by_id["D"].rank == 4
+    assert by_id["E"].rank == 4
+    assert out.tie_events == ()
+
+
+def test_tie_outside_podium_requires_previous_rounds_when_enabled():
     athletes = [
         Athlete(id="A", name="Ana"),
         Athlete(id="B", name="Bob"),
@@ -62,6 +91,36 @@ def test_tie_outside_podium_can_stay_shared_rank():
         "E": LeadResult(topped=False, hold=30, plus=False, time_seconds=104),
     }
     out = compute_lead_ranking(athletes, results, tie_break_resolver=None, podium_places=3)
+    by_id = _rows_by_id(out)
+    assert out.is_resolved is False
+    assert by_id["D"].rank == 4
+    assert by_id["E"].rank == 4
+    pending = [ev for ev in out.tie_events if ev.stage == "previous_rounds" and ev.status == "pending"]
+    assert pending
+    assert pending[0].affects_podium is False
+
+
+def test_non_podium_previous_rounds_no_keeps_shared_rank_and_is_resolved():
+    athletes = [
+        Athlete(id="A", name="Ana"),
+        Athlete(id="B", name="Bob"),
+        Athlete(id="C", name="Cara"),
+        Athlete(id="D", name="Dan"),
+        Athlete(id="E", name="Ema"),
+    ]
+    results = {
+        "A": LeadResult(topped=True, hold=40, plus=False, time_seconds=100),
+        "B": LeadResult(topped=False, hold=39, plus=True, time_seconds=101),
+        "C": LeadResult(topped=False, hold=38, plus=True, time_seconds=102),
+        "D": LeadResult(topped=False, hold=30, plus=False, time_seconds=103),
+        "E": LeadResult(topped=False, hold=30, plus=False, time_seconds=104),
+    }
+    resolver = _MapResolver(
+        decisions={
+            ("previous_rounds", ("D", "E"), 4): TieBreakDecision(choice="no"),
+        }
+    )
+    out = compute_lead_ranking(athletes, results, tie_break_resolver=resolver, podium_places=3)
     by_id = _rows_by_id(out)
     assert out.is_resolved is True
     assert by_id["D"].rank == 4
@@ -145,6 +204,28 @@ def test_three_way_partial_previous_rounds_then_time_for_remaining_subgroup():
     assert by_id["B"].tb_time is True
 
 
+def test_identical_podium_times_keep_shared_rank_but_resolve_workflow():
+    athletes = [Athlete(id="A", name="Ana"), Athlete(id="B", name="Bob")]
+    results = {
+        "A": LeadResult(topped=False, hold=30, plus=False, time_seconds=100),
+        "B": LeadResult(topped=False, hold=30, plus=False, time_seconds=100),
+    }
+    resolver = _MapResolver(
+        decisions={
+            ("previous_rounds", ("A", "B"), 1): TieBreakDecision(choice="no"),
+            ("time", ("A", "B"), 1): TieBreakDecision(choice="yes"),
+        }
+    )
+    out = compute_lead_ranking(athletes, results, tie_break_resolver=resolver)
+    by_id = _rows_by_id(out)
+    assert out.is_resolved is True
+    assert out.errors == ()
+    assert by_id["A"].rank == 1
+    assert by_id["B"].rank == 1
+    assert by_id["A"].tb_time is True
+    assert by_id["B"].tb_time is True
+
+
 def test_partial_previous_rounds_input_keeps_existing_split_and_only_new_member_pending():
     athletes = [
         Athlete(id="A", name="Ana"),
@@ -204,7 +285,7 @@ def test_inconsistent_admin_input_is_reported_and_podium_remains_unresolved():
     assert pending[0].missing_prev_rounds_athlete_ids == ("B",)
 
 
-def test_previous_podium_tiebreak_does_not_keep_split_below_podium():
+def test_previous_rounds_split_is_kept_below_podium():
     athletes = [
         Athlete(id="X", name="Xena"),
         Athlete(id="A", name="Ana"),
@@ -232,10 +313,10 @@ def test_previous_podium_tiebreak_does_not_keep_split_below_podium():
     out = compute_lead_ranking(athletes, results, tie_break_resolver=_AlwaysSplitResolver())
     by_id = _rows_by_id(out)
     assert by_id["A"].rank == 4
-    assert by_id["B"].rank == 4
+    assert by_id["B"].rank == 5
 
 
-def test_only_tail_below_podium_collapses_when_group_straddles_boundary():
+def test_previous_rounds_split_can_span_podium_boundary_without_collapse():
     athletes = [
         Athlete(id="A", name="Ana"),
         Athlete(id="B", name="Bob"),
@@ -265,4 +346,4 @@ def test_only_tail_below_podium_collapses_when_group_straddles_boundary():
     by_id = _rows_by_id(out)
     assert by_id["C"].rank == 3
     assert by_id["D"].rank == 4
-    assert by_id["E"].rank == 4
+    assert by_id["E"].rank == 5

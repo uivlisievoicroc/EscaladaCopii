@@ -2,8 +2,8 @@
 
 Single source of truth for Lead ranking across API/UI/export:
 - Comparator: Top > non-Top; then hold; then plus.
-- Podium ties (1..podium_places) require explicit resolution workflow.
-- Non-podium ties can stay shared unless explicitly broken.
+- When tie-break is enabled, previous-rounds can apply to any tie group.
+- Time tie-break is only used for groups that start on the podium.
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from dataclasses import replace
 from typing import Literal, Protocol, Sequence
 
 
@@ -367,22 +366,8 @@ def _resolve_time_stage(
     for part in partitions:
         for item in part:
             item.tb_time = True
-    has_unresolved = any(len(part) > 1 for part in partitions)
-    if has_unresolved and affects_podium:
-        tie_events.append(
-            TieEvent(
-                fingerprint=fp,
-                stage="time",
-                rank_start=rank_start,
-                rank_end=rank_end,
-                affects_podium=True,
-                members=tuple(_to_ranking_row(item, rank_start) for item in members),
-                status="error",
-                detail="identical_time_keeps_podium_tie",
-            )
-        )
     chunks = [_TieChunk(items=list(part)) for part in partitions]
-    return chunks, not (has_unresolved and affects_podium)
+    return chunks, True
 
 
 def _resolve_group(
@@ -396,9 +381,6 @@ def _resolve_group(
     errors: list[str],
 ) -> tuple[list[_TieChunk], bool]:
     affects_podium = rank_start <= podium_places
-    if not affects_podium:
-        # Outside podium we keep shared ranks by default.
-        return [_TieChunk(items=list(members))], True
     rank_end = rank_start + len(members) - 1
     fp = _build_tie_fingerprint(
         round_name=round_name,
@@ -439,9 +421,11 @@ def _resolve_group(
                 requires_prev_rounds_input=True,
             )
         )
-        return [_TieChunk(items=list(members))], not affects_podium
+        return [_TieChunk(items=list(members))], False
 
     if decision.choice == "no":
+        if not affects_podium:
+            return [_TieChunk(items=list(members))], True
         return _resolve_time_stage(
             members=members,
             rank_start=rank_start,
@@ -472,7 +456,7 @@ def _resolve_group(
                 requires_prev_rounds_input=True,
             )
         )
-        return [_TieChunk(items=list(members))], False if affects_podium else True
+        return [_TieChunk(items=list(members))], False
 
     ranks_by_athlete = decision.previous_ranks_by_athlete or {}
     known_members: list[_ResolvedItem] = []
@@ -517,17 +501,20 @@ def _resolve_group(
                 part[0].tb_prev = True
             chunks.append(_TieChunk(items=list(part)))
             continue
-        time_chunks, resolved = _resolve_time_stage(
-            members=part,
-            rank_start=part_rank_start,
-            podium_places=podium_places,
-            round_name=round_name,
-            resolver=resolver,
-            tie_events=tie_events,
-            errors=errors,
-        )
-        chunks.extend(time_chunks)
-        all_resolved = all_resolved and resolved
+        if part_rank_start <= podium_places:
+            time_chunks, resolved = _resolve_time_stage(
+                members=part,
+                rank_start=part_rank_start,
+                podium_places=podium_places,
+                round_name=round_name,
+                resolver=resolver,
+                tie_events=tie_events,
+                errors=errors,
+            )
+            chunks.extend(time_chunks)
+            all_resolved = all_resolved and resolved
+        else:
+            chunks.append(_TieChunk(items=list(part)))
     if missing_members:
         missing_members_sorted = sorted(missing_members, key=_stable_athlete_sort_key)
         chunks.append(_TieChunk(items=list(missing_members_sorted)))
@@ -563,6 +550,7 @@ def compute_lead_ranking(
     podium_places: int = 3,
     *,
     round_name: str = "Final",
+    tiebreak_enabled: bool = True,
 ) -> RankingResult:
     """
     Compute final Lead ranking with explicit tie-break workflow support.
@@ -573,6 +561,7 @@ def compute_lead_ranking(
       tie_break_resolver: resolver used for manual previous-round/time decisions.
       podium_places: podium threshold (default 3).
       round_name: used in fingerprints/context.
+      tiebreak_enabled: enables previous-rounds/time workflow when true.
     """
     podium_places = max(1, int(podium_places or 3))
     resolved_items: list[_ResolvedItem] = []
@@ -608,96 +597,41 @@ def compute_lead_ranking(
         if len(group) <= 1:
             final_chunks.append(_TieChunk(items=list(group)))
         else:
-            chunks, _ = _resolve_group(
-                members=group,
-                rank_start=rank_start,
-                podium_places=podium_places,
-                round_name=round_name,
-                resolver=tie_break_resolver,
-                tie_events=tie_events,
-                errors=errors,
-            )
-            final_chunks.extend(chunks)
+            if not tiebreak_enabled:
+                final_chunks.append(_TieChunk(items=list(group)))
+            else:
+                chunks, _ = _resolve_group(
+                    members=group,
+                    rank_start=rank_start,
+                    podium_places=podium_places,
+                    round_name=round_name,
+                    resolver=tie_break_resolver,
+                    tie_events=tie_events,
+                    errors=errors,
+                )
+                final_chunks.extend(chunks)
         i = j
 
     rows: list[RankingRow] = []
     pos = 1
-    has_pending_podium = False
     for chunk in final_chunks:
         rank = pos
         for item in sorted(chunk.items, key=_stable_athlete_sort_key):
             rows.append(_to_ranking_row(item, rank))
-        if len(chunk.items) > 1 and rank <= podium_places:
-            has_pending_podium = True
         pos += len(chunk.items)
 
     # Preserve final order by rank then deterministic athlete sort.
     rows.sort(key=lambda row: (row.rank, row.athlete_name.lower(), row.athlete_id))
-
-    # Safety: keep tie-break impact constrained to podium only.
-    # - If a full performance group falls below podium: collapse all to shared rank.
-    # - If a group straddles podium boundary (e.g. ranks 3,4,5): keep podium part, collapse only tail > podium.
-    by_perf = sorted(
-        rows,
-        key=lambda row: (
-            -int(bool(row.topped)),
-            -int(row.hold),
-            -int(bool(row.plus and not row.topped)),
-            row.athlete_name.lower(),
-            row.athlete_id,
-        ),
+    has_pending_podium = any(
+        event.affects_podium and event.status in {"pending", "error"}
+        for event in tie_events
     )
-    collapsed: dict[str, int] = {}
-    i = 0
-    while i < len(by_perf):
-        current = by_perf[i]
-        key = (
-            int(bool(current.topped)),
-            int(current.hold),
-            int(bool(current.plus and not current.topped)),
-        )
-        j = i + 1
-        while j < len(by_perf):
-            other = by_perf[j]
-            other_key = (
-                int(bool(other.topped)),
-                int(other.hold),
-                int(bool(other.plus and not other.topped)),
-            )
-            if other_key != key:
-                break
-            j += 1
-        group = by_perf[i:j]
-        if len(group) > 1:
-            min_rank = min(r.rank for r in group)
-            max_rank = max(r.rank for r in group)
-            if min_rank > podium_places:
-                for r in group:
-                    collapsed[r.athlete_id] = min_rank
-            elif max_rank > podium_places:
-                tail = [r for r in group if r.rank > podium_places]
-                if tail:
-                    shared_tail_rank = min(r.rank for r in tail)
-                    for r in tail:
-                        collapsed[r.athlete_id] = shared_tail_rank
-        i = j
-    if collapsed:
-        rows = [
-            replace(row, rank=collapsed.get(row.athlete_id, row.rank))
-            for row in rows
-        ]
-        rows.sort(key=lambda row: (row.rank, row.athlete_name.lower(), row.athlete_id))
-
-    # Pending/error podium events also mark unresolved status.
-    for event in tie_events:
-        if event.affects_podium and event.status in {"pending", "error"}:
-            has_pending_podium = True
-            break
+    has_unresolved_ties = any(event.status in {"pending", "error"} for event in tie_events)
 
     return RankingResult(
         rows=tuple(rows),
         tie_events=tuple(tie_events),
-        is_resolved=not has_pending_podium,
+        is_resolved=not has_unresolved_ties,
         has_pending_podium_ties=has_pending_podium,
         errors=tuple(errors),
     )

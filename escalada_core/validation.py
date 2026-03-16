@@ -61,14 +61,14 @@ class ValidatedCmd(BaseModel):
     timeCriterionEnabled: Optional[bool] = None
     # Time tiebreak decision
     timeTiebreakDecision: Optional[str] = Field(
-        None, description="'yes' or 'no' for manual top-3 time tiebreak decision"
+        None, description="'yes' or 'no' for manual time tiebreak decision"
     )
     timeTiebreakFingerprint: Optional[str] = Field(
         None, min_length=1, max_length=256, description="Deterministic fingerprint for tie event"
     )
     # Previous-rounds tiebreak decision
     prevRoundsTiebreakDecision: Optional[str] = Field(
-        None, description="'yes' or 'no' for manual top-3 previous-rounds tiebreak decision"
+        None, description="'yes' or 'no' for manual previous-rounds tiebreak decision"
     )
     prevRoundsTiebreakFingerprint: Optional[str] = Field(
         None, min_length=1, max_length=256, description="Deterministic fingerprint for tie event"

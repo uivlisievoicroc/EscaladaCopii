@@ -52,7 +52,7 @@ class ContestState(TypedDict, total=False):
     
     # Time criterion (for ranking tiebreaks)
     timeCriterionEnabled: bool
-    # Last user preference for top-3 time tiebreak ("yes" | "no"), if any.
+    # Last user preference for time tiebreak ("yes" | "no"), if any.
     timeTiebreakPreference: Optional[str]
     # Fingerprint of the currently resolved eligible-tie event.
     timeTiebreakResolvedFingerprint: Optional[str]
