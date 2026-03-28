@@ -35,7 +35,10 @@ from escalada.api.save_ranking import (
     RankingIn,
     _build_overall_df,
     _df_to_pdf,
+    _format_overall_score_columns_for_display,
+    _format_route_score_column_for_display,
     _format_time,
+    _resolve_route_holds_count,
     _to_seconds,
 )
 from escalada.api.ranking_time_tiebreak import resolve_rankings_with_time_tiebreak
@@ -331,6 +334,16 @@ def build_official_results_zip(snapshot: dict[str, Any]) -> bytes:
             tb_time_flags=overall_tb_flags,
             tb_prev_flags=overall_tb_prev_flags,
         )
+        _format_overall_score_columns_for_display(
+            overall_df,
+            route_count=route_count,
+            holds_counts=snapshot.get("holdsCounts")
+            if isinstance(snapshot.get("holdsCounts"), list)
+            else None,
+            active_holds_count=snapshot.get("holdsCount")
+            if isinstance(snapshot.get("holdsCount"), int)
+            else None,
+        )
         overall_xlsx = tmp_dir / "overall.xlsx"
         overall_pdf = tmp_dir / "overall.pdf"
         overall_df.to_excel(overall_xlsx, index=False)
@@ -355,6 +368,20 @@ def build_official_results_zip(snapshot: dict[str, Any]) -> bytes:
                 rank_override=active_route_rank_override if is_active_route else None,
                 tb_time_flags=active_route_tb_flags if is_active_route else None,
                 tb_prev_flags=active_route_tb_prev_flags if is_active_route else None,
+            )
+            route_holds_count = _resolve_route_holds_count(
+                route_idx=r,
+                route_count=route_count,
+                holds_counts=snapshot.get("holdsCounts")
+                if isinstance(snapshot.get("holdsCounts"), list)
+                else None,
+                active_holds_count=snapshot.get("holdsCount")
+                if isinstance(snapshot.get("holdsCount"), int)
+                else None,
+            )
+            _format_route_score_column_for_display(
+                df_route,
+                holds_count=route_holds_count,
             )
             xlsx_route = tmp_dir / f"route_{r+1}.xlsx"
             pdf_route = tmp_dir / f"route_{r+1}.pdf"

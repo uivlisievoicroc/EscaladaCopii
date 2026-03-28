@@ -66,6 +66,46 @@ def format_time(val) -> str | None:
     return f"{m:02d}:{s:02d}"
 
 
+def format_lead_score_display(score: float | int | None, holds_count: int | None = None) -> str | None:
+    """
+    Convert raw numeric lead score into public/export label.
+
+    Rules:
+    - None/NaN -> None (empty cell)
+    - score reaching holds_count -> "TOP"
+    - integer score -> "N"
+    - exact .1 fraction -> "N+"
+    - any other fraction -> decimal string (e.g. 12.5)
+    """
+    if score is None:
+        return None
+    try:
+        safe_score = float(score)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(safe_score):
+        return None
+
+    epsilon = 1e-9
+    if (
+        isinstance(holds_count, int)
+        and holds_count > 0
+        and safe_score >= float(holds_count) - epsilon
+    ):
+        return "TOP"
+
+    rounded = int(round(safe_score))
+    if math.isclose(safe_score, float(rounded), abs_tol=epsilon):
+        return str(rounded)
+
+    floored = math.floor(safe_score)
+    frac = safe_score - float(floored)
+    if math.isclose(frac, 0.1, abs_tol=epsilon):
+        return f"{floored}+"
+
+    return f"{safe_score:.10f}".rstrip("0").rstrip(".")
+
+
 def build_overall_df(
     payload: Any,
     normalized_times: dict[str, list[int | None]] | None = None,

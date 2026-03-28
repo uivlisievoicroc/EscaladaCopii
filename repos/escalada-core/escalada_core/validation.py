@@ -128,6 +128,7 @@ class ValidatedCmd(BaseModel):
             "PROGRESS_UPDATE",
             "REQUEST_ACTIVE_COMPETITOR",
             "SUBMIT_SCORE",
+            "MODIFY_SCORE",
             "INIT_ROUTE",
             "REQUEST_STATE",
             "SET_TIMER_PRESET",
@@ -369,6 +370,16 @@ class ValidatedCmd(BaseModel):
             ):
                 raise ValueError("SUBMIT_SCORE requires competitor, competitorIdx, or idx")
 
+        elif cmd_type == "MODIFY_SCORE":
+            if (
+                self.competitor is None
+                and self.competitorIdx is None
+                and self.idx is None
+            ):
+                raise ValueError("MODIFY_SCORE requires competitor, competitorIdx, or idx")
+            if self.score is None:
+                raise ValueError("MODIFY_SCORE requires score")
+
         elif cmd_type == "REGISTER_TIME":
             if self.registeredTime is None and self.time is None:
                 # allow time alias mapping at API layer
@@ -438,6 +449,7 @@ class RateLimitConfig:
         "PROGRESS_UPDATE": 120,  # Frequent updates
         "REQUEST_ACTIVE_COMPETITOR": 30,
         "SUBMIT_SCORE": 60,
+        "MODIFY_SCORE": 30,
         "INIT_ROUTE": 10,
         "REQUEST_STATE": 30,
         "SET_TIME_CRITERION": 10,

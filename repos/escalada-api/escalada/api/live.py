@@ -244,7 +244,15 @@ def _apply_server_side_timer(state: dict, cmd_payload: dict, now_ms: int) -> Non
             state["timerEndsAtMs"] = None
         return
 
-    if cmd_type in {"SUBMIT_SCORE", "RESET_BOX"}:
+    if cmd_type == "SUBMIT_SCORE":
+        if cmd_payload.get("preserveLiveFlow") is True:
+            return
+        preset = state.get("timerPresetSec")
+        state["timerRemainingSec"] = float(preset) if isinstance(preset, (int, float)) else None
+        state["timerEndsAtMs"] = None
+        return
+
+    if cmd_type == "RESET_BOX":
         preset = state.get("timerPresetSec")
         state["timerRemainingSec"] = float(preset) if isinstance(preset, (int, float)) else None
         state["timerEndsAtMs"] = None
@@ -307,7 +315,7 @@ class Cmd(BaseModel):
 
     boxId: int
     # Command type drives which optional fields must be present.
-    type: str  # START_TIMER, STOP_TIMER, RESUME_TIMER, PROGRESS_UPDATE, REQUEST_ACTIVE_COMPETITOR, SUBMIT_SCORE, INIT_ROUTE, REQUEST_STATE
+    type: str  # START_TIMER, STOP_TIMER, RESUME_TIMER, PROGRESS_UPDATE, REQUEST_ACTIVE_COMPETITOR, SUBMIT_SCORE, MODIFY_SCORE, INIT_ROUTE, REQUEST_STATE
 
     # ---- generic optional fields ----
     # for PROGRESS_UPDATE
@@ -724,8 +732,10 @@ def _public_update_type(cmd_type: str) -> str | None:
         "RESUME_TIMER": "BOX_FLOW_UPDATE",
         "SET_TIMER_PRESET": "BOX_FLOW_UPDATE",
         "TIMER_SYNC": "BOX_FLOW_UPDATE",
+        "PROGRESS_UPDATE": "BOX_FLOW_UPDATE",
         "REGISTER_TIME": "BOX_FLOW_UPDATE",
         "SUBMIT_SCORE": "BOX_RANKING_UPDATE",
+        "MODIFY_SCORE": "BOX_RANKING_UPDATE",
         "SET_TIME_CRITERION": "BOX_RANKING_UPDATE",
         "SET_TIME_TIEBREAK_DECISION": "BOX_RANKING_UPDATE",
         "SET_PREV_ROUNDS_TIEBREAK_DECISION": "BOX_RANKING_UPDATE",

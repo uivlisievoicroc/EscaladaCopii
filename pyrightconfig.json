@@ -1,7 +1,13 @@
 {
-  "venvPath": "/Users/silviucorciovei/Library/Caches/pypoetry/virtualenvs",
-  "venv": "escalada-eFaA333Q-py3.13",
-  "pythonVersion": "3.13",
+  "pythonVersion": "3.11",
   "typeCheckingMode": "basic",
-  "include": ["Escalada"]
+  "include": [
+    "repos/escalada-api/escalada",
+    "repos/escalada-core/escalada_core"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "repos/escalada-ui",
+    "repos/escalada-judge-android"
+  ]
 }

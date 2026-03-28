@@ -178,6 +178,27 @@ const formatSeconds = (sec: number | null | undefined): string => {
   return `${m}:${s}`;
 };
 
+const formatLeadScoreDisplay = (
+  score: number | null | undefined,
+  holdsCount?: number,
+): string | null => {
+  if (typeof score !== 'number' || !Number.isFinite(score)) return null;
+  const epsilon = 1e-9;
+  if (
+    typeof holdsCount === 'number' &&
+    Number.isFinite(holdsCount) &&
+    holdsCount > 0 &&
+    score >= holdsCount - epsilon
+  ) {
+    return 'TOP';
+  }
+  const rounded = Math.round(score);
+  if (Math.abs(score - rounded) < epsilon) return `${rounded}`;
+  const floored = Math.floor(score);
+  if (Math.abs(score - (floored + 0.1)) < epsilon) return `${floored}+`;
+  return `${score}`;
+};
+
 
 /**
  * buildRankingRows - Build Complete Rankings Table
@@ -558,10 +579,13 @@ const RankingsBoard: FC<RankingsBoardProps> = ({ boxes, selectedBoxId, setSelect
                             : undefined;
                           const isScoreNumber =
                             typeof scoreVal === 'number' && Number.isFinite(scoreVal);
-                          const isTop =
-                            isScoreNumber &&
-                            typeof maxHolds === 'number' &&
-                            scoreVal === Number(maxHolds);  // Check if TOP (all holds)
+                          const scoreDisplay = isScoreNumber
+                            ? formatLeadScoreDisplay(
+                                scoreVal,
+                                typeof maxHolds === 'number' ? Number(maxHolds) : undefined,
+                              )
+                            : null;
+                          const isTop = scoreDisplay === 'TOP';
 
                           return (
                             <div
@@ -578,7 +602,7 @@ const RankingsBoard: FC<RankingsBoardProps> = ({ boxes, selectedBoxId, setSelect
                                 ) : (
                                   // Numeric score - Partial completion
                                   <span className="font-mono text-slate-100">
-                                    {scoreVal.toFixed(1)}
+                                    {scoreDisplay}
                                   </span>
                                 )
                               ) : (

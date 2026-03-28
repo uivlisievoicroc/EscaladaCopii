@@ -174,3 +174,172 @@ def test_public_ws_box_ranking_update_includes_lead_ranking_rows(client: TestCli
         assert isinstance(update["box"].get("leadRankingRows"), list)
         assert update["box"]["leadRankingRows"], "BOX_RANKING_UPDATE should include ranking rows"
         assert update["box"]["leadRankingRows"][0]["name"] == "Mara"
+
+
+def test_modify_score_keeps_active_flow_state_while_updating_ranking(
+    client: TestClient, monkeypatch
+):
+    headers = _unlock_admin_headers(client, monkeypatch)
+    box_id = 2
+    now_ms = {"value": 0}
+    monkeypatch.setattr(live, "_now_ms", lambda: now_ms["value"])
+
+    init_payload = {
+        "boxId": box_id,
+        "type": "INIT_ROUTE",
+        "categorie": "Youth",
+        "routeIndex": 1,
+        "routesCount": 1,
+        "holdsCount": 18,
+        "timerPreset": "01:00",
+        "competitors": [
+            {"nume": "Mara", "marked": False},
+            {"nume": "Ioana", "marked": False},
+        ],
+    }
+    init_res = client.post("/api/cmd", headers=headers, json=init_payload)
+    assert init_res.status_code == 200
+    assert init_res.json().get("status") == "ok"
+    session_id = live.state_map[box_id]["sessionId"]
+
+    submit_res = client.post(
+        "/api/cmd",
+        headers=headers,
+        json={
+            "boxId": box_id,
+            "type": "SUBMIT_SCORE",
+            "competitor": "Mara",
+            "score": 11.0,
+            "registeredTime": 88.0,
+            "sessionId": session_id,
+        },
+    )
+    assert submit_res.status_code == 200
+    assert submit_res.json().get("status") == "ok"
+
+    start_res = client.post(
+        "/api/cmd",
+        headers=headers,
+        json={"boxId": box_id, "type": "START_TIMER", "sessionId": session_id},
+    )
+    assert start_res.status_code == 200
+    assert start_res.json().get("status") == "ok"
+
+    progress_res = client.post(
+        "/api/cmd",
+        headers=headers,
+        json={"boxId": box_id, "type": "PROGRESS_UPDATE", "delta": 1, "sessionId": session_id},
+    )
+    assert progress_res.status_code == 200
+    assert progress_res.json().get("status") == "ok"
+
+    now_ms["value"] = 15000
+    modify_res = client.post(
+        "/api/cmd",
+        headers=headers,
+        json={
+            "boxId": box_id,
+            "type": "MODIFY_SCORE",
+            "competitor": "Mara",
+            "score": 12.5,
+            "registeredTime": 90.0,
+            "sessionId": session_id,
+        },
+    )
+    assert modify_res.status_code == 200
+    assert modify_res.json().get("status") == "ok"
+
+    state_res = client.get(f"/api/state/{box_id}")
+    assert state_res.status_code == 200
+    state = state_res.json()
+
+    assert state["currentClimber"] == "Ioana"
+    assert state["timerState"] == "running"
+    assert state["holdCount"] == 1
+    assert state["remaining"] == pytest.approx(45.0, abs=0.1)
+    assert state["scoresByName"]["Mara"][0] == 12.5
+    assert state["timesByName"]["Mara"][0] == 90.0
+
+
+def test_duplicate_submit_for_marked_competitor_does_not_reset_active_flow(
+    client: TestClient, monkeypatch
+):
+    headers = _unlock_admin_headers(client, monkeypatch)
+    box_id = 4
+    now_ms = {"value": 0}
+    monkeypatch.setattr(live, "_now_ms", lambda: now_ms["value"])
+
+    init_payload = {
+        "boxId": box_id,
+        "type": "INIT_ROUTE",
+        "categorie": "Youth",
+        "routeIndex": 1,
+        "routesCount": 1,
+        "holdsCount": 18,
+        "timerPreset": "01:00",
+        "competitors": [
+            {"nume": "Mara", "marked": False},
+            {"nume": "Ioana", "marked": False},
+        ],
+    }
+    init_res = client.post("/api/cmd", headers=headers, json=init_payload)
+    assert init_res.status_code == 200
+    assert init_res.json().get("status") == "ok"
+    session_id = live.state_map[box_id]["sessionId"]
+
+    submit_res = client.post(
+        "/api/cmd",
+        headers=headers,
+        json={
+            "boxId": box_id,
+            "type": "SUBMIT_SCORE",
+            "competitor": "Mara",
+            "score": 11.0,
+            "registeredTime": 88.0,
+            "sessionId": session_id,
+        },
+    )
+    assert submit_res.status_code == 200
+    assert submit_res.json().get("status") == "ok"
+
+    start_res = client.post(
+        "/api/cmd",
+        headers=headers,
+        json={"boxId": box_id, "type": "START_TIMER", "sessionId": session_id},
+    )
+    assert start_res.status_code == 200
+    assert start_res.json().get("status") == "ok"
+
+    progress_res = client.post(
+        "/api/cmd",
+        headers=headers,
+        json={"boxId": box_id, "type": "PROGRESS_UPDATE", "delta": 1, "sessionId": session_id},
+    )
+    assert progress_res.status_code == 200
+    assert progress_res.json().get("status") == "ok"
+
+    now_ms["value"] = 15000
+    legacy_edit_res = client.post(
+        "/api/cmd",
+        headers=headers,
+        json={
+            "boxId": box_id,
+            "type": "SUBMIT_SCORE",
+            "competitor": "Mara",
+            "score": 12.0,
+            "sessionId": session_id,
+        },
+    )
+    assert legacy_edit_res.status_code == 200
+    assert legacy_edit_res.json().get("status") == "ok"
+
+    state_res = client.get(f"/api/state/{box_id}")
+    assert state_res.status_code == 200
+    state = state_res.json()
+
+    assert state["currentClimber"] == "Ioana"
+    assert state["timerState"] == "running"
+    assert state["holdCount"] == 1
+    assert state["remaining"] == pytest.approx(45.0, abs=0.1)
+    assert state["scoresByName"]["Mara"][0] == 12.0
+    assert state["timesByName"]["Mara"][0] == 88.0

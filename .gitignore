@@ -2,16 +2,49 @@ __pycache__/
 *.pyc
 *.log
 .env
+.DS_Store
+
+# Editor and tool caches
 .vscode/
+.idea/
+.poetry-cache/
+.poetry-venvs/
+
+# Generic build/runtime artifacts
 node_modules/
-Escalada/node_modules/
 dist/
 build/
+coverage/
+htmlcov/
+playwright-report/
+blob-report/
+test-results/
+.venv/
+.pytest_cache/
+.gradle/
+.gradle-user-home/
+release/
+output/
+tmp/
 *.pdf
 *.xlsx
-Escalada/backups/
-Escalada/escalada/clasamente/
-.DS_Store
-repos/
 
-.poetry-cache/
+# Monorepo component-local artifacts
+repos/*/node_modules/
+repos/*/dist/
+repos/*/build/
+repos/*/coverage/
+repos/*/htmlcov/
+repos/*/playwright-report/
+repos/*/blob-report/
+repos/*/test-results/
+repos/*/.venv/
+repos/*/.pytest_cache/
+repos/*/.vscode/
+repos/*/.idea/
+repos/*/.gradle/
+repos/*/.gradle-user-home/
+repos/*/data/
+repos/*/backups/
+repos/*/frontend_dist/
+repos/*/local.properties

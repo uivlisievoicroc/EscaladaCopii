@@ -93,6 +93,14 @@ export async function submitScore(boxId, score, competitor, registeredTime) {
   });
 }
 
+export async function modifyScore(boxId, score, competitor, registeredTime) {
+  return sendBoxCommand(boxId, 'MODIFY_SCORE', {
+    score,
+    competitor,
+    registeredTime: typeof registeredTime === 'number' ? registeredTime : undefined,
+  });
+}
+
 export async function registerTime(boxId, registeredTime) {
   return sendBoxCommand(boxId, 'REGISTER_TIME', { registeredTime });
 }

@@ -28,6 +28,7 @@ from escalada.api.save_ranking_render import df_to_pdf
 from escalada.api.save_ranking_tables import (
     build_by_route_df,
     build_overall_df,
+    format_lead_score_display,
     format_time,
     tb_label,
     tb_notes_for_df,
@@ -87,6 +88,56 @@ class RankingIn(BaseModel):
     prev_rounds_tiebreak_ranks_by_fingerprint: dict[str, dict[str, int]] | None = None
     prev_rounds_tiebreak_lineage_ranks_by_key: dict[str, dict[str, int]] | None = None
     prev_rounds_tiebreak_resolved_ranks_by_name: dict[str, int] | None = None
+
+
+def _resolve_route_holds_count(
+    *,
+    route_idx: int,
+    route_count: int,
+    holds_counts: list[int] | None,
+    active_holds_count: int | None,
+) -> int | None:
+    if isinstance(holds_counts, list) and route_idx < len(holds_counts):
+        candidate = holds_counts[route_idx]
+        if isinstance(candidate, int) and candidate > 0:
+            return candidate
+    if route_count == 1 and isinstance(active_holds_count, int) and active_holds_count > 0:
+        return active_holds_count
+    return None
+
+
+def _format_overall_score_columns_for_display(
+    df: pd.DataFrame,
+    *,
+    route_count: int,
+    holds_counts: list[int] | None,
+    active_holds_count: int | None,
+) -> None:
+    for route_idx in range(max(0, int(route_count))):
+        col = f"Score R{route_idx + 1}"
+        if col not in df.columns:
+            continue
+        holds_count = _resolve_route_holds_count(
+            route_idx=route_idx,
+            route_count=route_count,
+            holds_counts=holds_counts,
+            active_holds_count=active_holds_count,
+        )
+        df[col] = df[col].map(
+            lambda score: format_lead_score_display(score, holds_count)
+        )
+
+
+def _format_route_score_column_for_display(
+    df: pd.DataFrame,
+    *,
+    holds_count: int | None,
+) -> None:
+    if "Score" not in df.columns:
+        return
+    df["Score"] = df["Score"].map(
+        lambda score: format_lead_score_display(score, holds_count)
+    )
 
 
 @router.post("/save_ranking")
@@ -165,6 +216,12 @@ def save_ranking(payload: RankingIn, claims=Depends(require_admin_action)):
         rank_override=overall_rank_override,
         tb_time_flags=overall_tb_time,
         tb_prev_flags=overall_tb_prev,
+    )
+    _format_overall_score_columns_for_display(
+        overall_df,
+        route_count=payload.route_count,
+        holds_counts=payload.holds_counts,
+        active_holds_count=payload.active_holds_count,
     )
     xlsx_tot = cat_dir / "overall.xlsx"
     pdf_tot = cat_dir / "overall.pdf"
@@ -262,6 +319,16 @@ def save_ranking(payload: RankingIn, claims=Depends(require_admin_action)):
             for value in df_route["TB"].tolist()
         ):
             df_route.drop(columns=["TB"], inplace=True)
+        route_holds_count = _resolve_route_holds_count(
+            route_idx=r,
+            route_count=payload.route_count,
+            holds_counts=payload.holds_counts,
+            active_holds_count=payload.active_holds_count,
+        )
+        _format_route_score_column_for_display(
+            df_route,
+            holds_count=route_holds_count,
+        )
 
         # 5) save Excel and PDF for this route
         xlsx_route = cat_dir / f"route_{r+1}.xlsx"

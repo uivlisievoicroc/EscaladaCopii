@@ -201,6 +201,7 @@ def get_rate_limiter() -> RateLimiter:
         _rate_limiter.set_command_limit("PROGRESS_UPDATE", 120)  # Frequent
         _rate_limiter.set_command_limit("INIT_ROUTE", 10)  # Rare
         _rate_limiter.set_command_limit("SUBMIT_SCORE", 30)  # Occasional
+        _rate_limiter.set_command_limit("MODIFY_SCORE", 30)  # Occasional
         _rate_limiter.set_command_limit(
             "REGISTER_TIME", 300
         )  # Allow frequent timestamp saves

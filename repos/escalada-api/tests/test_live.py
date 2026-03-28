@@ -208,6 +208,45 @@ class ServerSideTimerTest(BaseTestCase):
         self.assertEqual(after_sync_state.get("timerEndsAtMs"), 60000)
         self.assertAlmostEqual(stopped_state.get("timerRemainingSec"), 40.0, delta=0.1)
 
+    def test_repeated_submit_for_marked_competitor_keeps_running_remaining(self):
+        async def scenario():
+            with patch.object(live_module, "_server_side_timer_enabled", return_value=True):
+                with patch.object(live_module, "_now_ms", return_value=0):
+                    await cmd(
+                        Cmd(
+                            boxId=1,
+                            type="INIT_ROUTE",
+                            routeIndex=1,
+                            holdsCount=10,
+                            competitors=[{"nume": "Alex"}, {"nume": "Bob"}],
+                            timerPreset="01:00",
+                        )
+                    )
+                    await cmd(
+                        Cmd(
+                            boxId=1,
+                            type="SUBMIT_SCORE",
+                            competitor="Alex",
+                            score=7,
+                            registeredTime=12.0,
+                        )
+                    )
+                    await cmd(Cmd(boxId=1, type="START_TIMER"))
+
+                with patch.object(live_module, "_now_ms", return_value=15000):
+                    await cmd(Cmd(boxId=1, type="SUBMIT_SCORE", competitor="Alex", score=8))
+                    after_correction = dict(state_map[1])
+                    snapshot = live_module._build_snapshot(1, state_map[1])
+
+                return after_correction, snapshot
+
+        after_correction, snapshot = asyncio.run(scenario())
+        self.assertEqual(after_correction.get("currentClimber"), "Bob")
+        self.assertEqual(after_correction.get("timerState"), "running")
+        self.assertEqual(after_correction.get("timerEndsAtMs"), 60000)
+        self.assertAlmostEqual(after_correction.get("timerRemainingSec"), 60.0, delta=0.01)
+        self.assertAlmostEqual(snapshot.get("remaining"), 45.0, delta=0.1)
+
 
 class VersioningTest(BaseTestCase):
     def setUp(self):
@@ -265,6 +304,56 @@ class VersioningTest(BaseTestCase):
         v_after_start, v_after_sync, submit_res = asyncio.run(scenario())
         self.assertEqual(v_after_sync, v_after_start)
         self.assertEqual(submit_res.get("status"), "ok")
+
+    def test_timer_sync_ignores_stale_box_version(self):
+        async def scenario():
+            live_module.VALIDATION_ENABLED = True
+            try:
+                with patch.object(live_module, "save_box_state", return_value=None):
+                    with patch.object(live_module, "append_audit_event", return_value=None):
+                        await cmd(
+                            Cmd(
+                                boxId=1,
+                                type="INIT_ROUTE",
+                                routeIndex=1,
+                                holdsCount=10,
+                                competitors=[{"nume": "Alex"}],
+                                timerPreset="01:00",
+                            ),
+                            claims={"role": "admin", "sub": "test"},
+                        )
+                        sid = state_map[1]["sessionId"]
+                        v1 = state_map[1]["boxVersion"]
+
+                        await cmd(
+                            Cmd(boxId=1, type="START_TIMER", sessionId=sid, boxVersion=v1),
+                            claims={"role": "admin", "sub": "test"},
+                        )
+                        v_after_start = state_map[1]["boxVersion"]
+
+                        sync_res = await cmd(
+                            Cmd(
+                                boxId=1,
+                                type="TIMER_SYNC",
+                                sessionId=sid,
+                                boxVersion=max(0, v_after_start - 1),
+                                remaining=55.0,
+                            ),
+                            claims={"role": "admin", "sub": "test"},
+                        )
+                        return (
+                            sync_res,
+                            v_after_start,
+                            state_map[1]["boxVersion"],
+                            state_map[1]["remaining"],
+                        )
+            finally:
+                live_module.VALIDATION_ENABLED = False
+
+        sync_res, v_after_start, box_version_after_sync, legacy_remaining = asyncio.run(scenario())
+        self.assertEqual(sync_res.get("status"), "ok")
+        self.assertEqual(box_version_after_sync, v_after_start)
+        self.assertEqual(legacy_remaining, 55.0)
 
 
 # ==================== PROGRESS UPDATE TESTS ====================

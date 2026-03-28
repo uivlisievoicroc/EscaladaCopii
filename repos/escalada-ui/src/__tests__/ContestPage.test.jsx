@@ -5,6 +5,7 @@ import ContestPage from '../components/ContestPage';
 
 let localStore = {};
 let originalConsoleLog;
+let wsInstances = [];
 
 const setupLocalStorage = () => {
   localStore = {};
@@ -19,6 +20,18 @@ const setupLocalStorage = () => {
     localStore = {};
   });
 };
+
+const createMockSocket = () => ({
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+  send: vi.fn(),
+  close: vi.fn(),
+  readyState: 1,
+  onopen: null,
+  onmessage: null,
+  onerror: null,
+  onclose: null,
+});
 
 // Mock dependencies
 vi.mock('../utilis/debug', () => ({
@@ -96,17 +109,18 @@ afterAll(() => {
 describe('ContestPage - JSON.parse Regression Tests', () => {
   beforeEach(() => {
     setupLocalStorage();
+    wsInstances = [];
+    global.requestAnimationFrame = vi.fn(() => 1);
+    global.cancelAnimationFrame = vi.fn();
 
     global.fetch = vi.fn(() => new Promise(() => {}));
 
     // Mock WebSocket to prevent connection attempts
-    global.WebSocket = vi.fn().mockImplementation(() => ({
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      send: vi.fn(),
-      close: vi.fn(),
-      readyState: 0,
-    }));
+    global.WebSocket = vi.fn().mockImplementation(() => {
+      const socket = createMockSocket();
+      wsInstances.push(socket);
+      return socket;
+    });
 
     // Mock BroadcastChannel
     global.BroadcastChannel = vi.fn().mockImplementation(() => ({
@@ -134,6 +148,128 @@ describe('ContestPage - JSON.parse Regression Tests', () => {
 
     // Component should still render (even if with default/empty state)
     expect(document.body).toBeTruthy();
+  });
+
+  it('keeps the live timer when a running snapshot arrives without remaining and omits boxVersion from TIMER_SYNC', async () => {
+    localStorage.setItem('boxVersion-0', JSON.stringify(7));
+
+    renderContestPageAt('/contest/0');
+
+    const ws = wsInstances[0];
+    expect(ws).toBeTruthy();
+
+    global.fetch.mockClear();
+
+    await act(async () => {
+      ws.onopen?.();
+    });
+
+    await act(async () => {
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'STATE_SNAPSHOT',
+          boxId: 0,
+          sessionId: 'sid-0',
+          timerState: 'running',
+          remaining: 240,
+          timerPresetSec: 300,
+          currentClimber: 'Ioana',
+          preparingClimber: 'Mara',
+          competitors: [
+            { nume: 'Ioana', marked: false },
+            { nume: 'Mara', marked: false },
+          ],
+        }),
+      });
+    });
+
+    expect(JSON.parse(localStore['timer-0'])).toBe('240');
+    const syncBody = global.fetch.mock.calls
+      .map((call) => call?.[1]?.body)
+      .find((body) => typeof body === 'string' && body.includes('"type":"TIMER_SYNC"'));
+    expect(syncBody).toBeTruthy();
+    expect(syncBody).not.toContain('boxVersion');
+
+    await act(async () => {
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'STATE_SNAPSHOT',
+          boxId: 0,
+          sessionId: 'sid-0',
+          timerState: 'running',
+          timerPresetSec: 300,
+          currentClimber: 'Ioana',
+          preparingClimber: 'Mara',
+          competitors: [
+            { nume: 'Ioana', marked: false },
+            { nume: 'Mara', marked: false },
+          ],
+        }),
+      });
+    });
+
+    expect(JSON.parse(localStore['timer-0'])).toBe('240');
+  });
+
+  it('renders the route progress marker as integer, plus, and top values', async () => {
+    renderContestPageAt('/contest/0');
+
+    const ws = wsInstances[0];
+    expect(ws).toBeTruthy();
+
+    await act(async () => {
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'STATE_SNAPSHOT',
+          boxId: 0,
+          sessionId: 'sid-0',
+          timerState: 'idle',
+          holdsCount: 10,
+          holdCount: 2,
+          currentClimber: 'Ioana',
+          preparingClimber: 'Mara',
+          competitors: [
+            { nume: 'Ioana', marked: false },
+            { nume: 'Mara', marked: false },
+          ],
+        }),
+      });
+    });
+
+    expect(screen.getByTestId('route-progress-marker-label')).toHaveTextContent('2');
+
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'PROGRESS_UPDATE', boxId: 0, delta: 0.1 },
+        }),
+      );
+    });
+
+    expect(screen.getByTestId('route-progress-marker-label')).toHaveTextContent('2+');
+
+    await act(async () => {
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'STATE_SNAPSHOT',
+          boxId: 0,
+          sessionId: 'sid-0',
+          timerState: 'idle',
+          holdsCount: 10,
+          holdCount: 10,
+          currentClimber: 'Ioana',
+          preparingClimber: 'Mara',
+          competitors: [
+            { nume: 'Ioana', marked: false },
+            { nume: 'Mara', marked: false },
+          ],
+        }),
+      });
+    });
+
+    expect(screen.getByTestId('route-progress-marker-label')).toHaveTextContent('10');
+    expect(screen.getByTestId('route-progress-marker')).toBeInTheDocument();
+    expect(screen.getByTestId('route-progress-marker-connector')).toBeInTheDocument();
   });
 
   it('handles double-quoted empty string in localStorage', () => {

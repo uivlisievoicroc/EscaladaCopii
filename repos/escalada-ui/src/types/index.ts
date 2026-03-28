@@ -69,6 +69,7 @@ export type CommandType =
   | 'PROGRESS_UPDATE'
   | 'REGISTER_TIME'
   | 'SUBMIT_SCORE'
+  | 'MODIFY_SCORE'
   | 'REQUEST_STATE'
   | 'RESET_BOX'
   | 'RESET_PARTIAL'

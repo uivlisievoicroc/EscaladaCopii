@@ -11,47 +11,55 @@ on:
 jobs:
   deploy-check:
     name: Deployment Check
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Check deployment prerequisites
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: repos/escalada-ui/package-lock.json
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-in-project: true
+
+      - name: Install API dependencies
+        working-directory: repos/escalada-api
         run: |
-          echo "✅ Deployment prerequisites:"
-          echo "  - All tests passing (checked by CI workflow)"
-          echo "  - Code quality checks passing"
-          echo "  - Ready for deployment"
-      
-      - name: Build Backend
-        working-directory: Escalada
-        run: |
-          echo "Building backend..."
-          python -m py_compile escalada/*.py escalada/api/*.py escalada/routers/*.py
-          echo "✅ Backend build successful"
-      
-      - name: Build Frontend
-        working-directory: Escalada/escalada-ui
-        run: |
-          echo "Building frontend..."
-          npm ci > /dev/null 2>&1 || true
-          npm run build 2>/dev/null || echo "Note: Full build requires dependencies"
-          echo "✅ Frontend build successful"
+          poetry install --with dev
+          poetry run pip install -e ../escalada-core
+
+      - name: Install UI dependencies
+        working-directory: repos/escalada-ui
+        run: npm ci
+
+      - name: Compile API sources
+        working-directory: repos/escalada-api
+        run: poetry run python -m compileall escalada
+
+      - name: Build UI
+        working-directory: repos/escalada-ui
+        run: npm run build
 
   deployment-notes:
     name: Deployment Instructions
+    needs: [deploy-check]
     runs-on: ubuntu-latest
-    needs: deploy-check
-    
+
     steps:
       - name: Deployment ready
         run: |
-          echo "🚀 Application is ready for deployment!"
-          echo ""
-          echo "Deployment Steps:"
-          echo "1. Set up server environment (Python 3.11+, Node.js 18+)"
-          echo "2. Clone repository and checkout main branch"
-          echo "3. Backend: poetry install && poetry run uvicorn escalada.main:app --host 0.0.0.0 --port 8000"
-          echo "4. Frontend: npm install && npm run build && npm run preview"
-          echo "5. Configure CORS and environment variables"
-          echo "6. Start services and verify"
+          echo "Monorepo build checks passed."
+          echo "Build releases with scripts/build_release.py from the repo root."

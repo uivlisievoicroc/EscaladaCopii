@@ -44,6 +44,47 @@ class OfficialExportZipTest(unittest.TestCase):
         self.assertTrue(meta["timeCriterionEnabled"])
         self.assertIn("exportedAt", meta)
 
+    def test_build_official_results_zip_formats_plus_scores_in_overall_and_route(self):
+        import pandas as pd
+        from escalada.api.official_export import build_official_results_zip
+
+        snapshot = {
+            "boxId": 4,
+            "competitionId": 99,
+            "categorie": "U15M",
+            "routesCount": 1,
+            "routeIndex": 1,
+            "holdsCount": 20,
+            "holdsCounts": [20],
+            "timeCriterionEnabled": False,
+            "scores": {
+                "Ana": [9.1],
+                "Bob": [9.0],
+                "Cara": [20.0],
+                "Dan": [12.5],
+            },
+            "times": {},
+        }
+
+        zip_bytes = build_official_results_zip(snapshot)
+        zf = zipfile.ZipFile(BytesIO(zip_bytes))
+
+        overall_df = pd.read_excel(BytesIO(zf.read("U15M/overall.xlsx")))
+        route_df = pd.read_excel(BytesIO(zf.read("U15M/route_1.xlsx")))
+
+        overall_by_name = overall_df.set_index("Nume")
+        route_by_name = route_df.set_index("Name")
+
+        self.assertEqual(str(overall_by_name.loc["Ana", "Score R1"]), "9+")
+        self.assertEqual(str(overall_by_name.loc["Bob", "Score R1"]), "9")
+        self.assertEqual(str(overall_by_name.loc["Cara", "Score R1"]), "TOP")
+        self.assertEqual(str(overall_by_name.loc["Dan", "Score R1"]), "12.5")
+
+        self.assertEqual(str(route_by_name.loc["Ana", "Score"]), "9+")
+        self.assertEqual(str(route_by_name.loc["Bob", "Score"]), "9")
+        self.assertEqual(str(route_by_name.loc["Cara", "Score"]), "TOP")
+        self.assertEqual(str(route_by_name.loc["Dan", "Score"]), "12.5")
+
     def test_build_official_results_zip_requires_scores(self):
         from escalada.api.official_export import build_official_results_zip
 

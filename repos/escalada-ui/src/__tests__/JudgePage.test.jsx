@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { applyHoldDelta, formatHoldDisplay } from '../utilis/holdProgress';
 
 /**
  * JudgePage Unit Tests - Focus on helper functions and state logic
@@ -307,6 +308,22 @@ describe('JudgePage - Helper Functions & Logic', () => {
   });
 
   describe('Numeric Operations', () => {
+    it('formats semi-holds using plus notation', () => {
+      expect(formatHoldDisplay(7)).toBe('7');
+      expect(formatHoldDisplay(7.1)).toBe('7+');
+      expect(formatHoldDisplay(7.099999)).toBe('7+');
+    });
+
+    it('applies + then +1 without drifting or skipping', () => {
+      const afterPlus = applyHoldDelta(7, 0.1, 12);
+      const afterFullHold = applyHoldDelta(afterPlus, 1, 12);
+
+      expect(afterPlus).toBe(7.1);
+      expect(formatHoldDisplay(afterPlus)).toBe('7+');
+      expect(afterFullHold).toBe(8);
+      expect(formatHoldDisplay(afterFullHold)).toBe('8');
+    });
+
     it('safely parses integer values', () => {
       const toInt = (value) => {
         const parsed = parseInt(value, 10);

@@ -1,18 +1,43 @@
 #!/bin/sh
-# Husky pre-commit hook: run Prettier via lint-staged (frontend) and pre-commit (backend)
+# Husky pre-commit hook for the EscaladaCopii monorepo.
 
-# Format staged frontend files
-cd Escalada/escalada-ui || exit 1
-npx lint-staged || exit 1
+set -e
 
-# Run Python pre-commit hooks on staged Python files
-cd ../ || exit 1
-STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | tr '\n' ' ')
-if [ -n "$STAGED_FILES" ]; then
-	# Only pass files inside Escalada/escalada
-	FILTERED_FILES=$(echo "$STAGED_FILES" | tr ' ' '\n' | grep '^Escalada/escalada/.*\.py$' | tr '\n' ' ')
-	if [ -n "$FILTERED_FILES" ]; then
-		echo "Running pre-commit on: $FILTERED_FILES"
-		(cd Escalada && poetry run pre-commit run --files $FILTERED_FILES) || exit 1
+ROOT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+FRONTEND_DIR="$ROOT_DIR/repos/escalada-ui"
+if [ -d "$FRONTEND_DIR" ]; then
+	FRONTEND_STAGED=$(printf '%s\n' "$STAGED_FILES" | awk 'index($0, "repos/escalada-ui/") == 1')
+	if [ -n "$FRONTEND_STAGED" ]; then
+		(cd "$FRONTEND_DIR" && npx lint-staged)
+	else
+		echo "Skipping frontend lint-staged: no staged frontend files."
 	fi
+else
+	echo "Skipping frontend lint-staged: repos/escalada-ui not found."
+fi
+
+PYTHON_STAGED=$(printf '%s\n' "$STAGED_FILES" | awk '
+	(index($0, "repos/escalada-api/") == 1 || index($0, "repos/escalada-core/") == 1) && $0 ~ /\.py$/ {
+		print
+	}
+')
+
+if [ -n "$PYTHON_STAGED" ]; then
+	PRE_COMMIT_BIN=""
+	if [ -x "$ROOT_DIR/repos/escalada-api/.venv/bin/pre-commit" ]; then
+		PRE_COMMIT_BIN="$ROOT_DIR/repos/escalada-api/.venv/bin/pre-commit"
+	elif command -v pre-commit >/dev/null 2>&1; then
+		PRE_COMMIT_BIN=$(command -v pre-commit)
+	fi
+
+	if [ -n "$PRE_COMMIT_BIN" ]; then
+		echo "Running pre-commit on Python files"
+		(cd "$ROOT_DIR" && "$PRE_COMMIT_BIN" run --config .pre-commit-config.yaml --files $PYTHON_STAGED)
+	else
+		echo "Skipping Python pre-commit: pre-commit not found."
+	fi
+else
+	echo "Skipping Python pre-commit: no staged backend/core Python files."
 fi

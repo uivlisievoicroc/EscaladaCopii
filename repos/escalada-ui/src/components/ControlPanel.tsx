@@ -38,6 +38,7 @@ import {
   updateProgress,
   requestActiveCompetitor,
   submitScore,
+  modifyScore,
   initRoute,
   setTimerPreset,
   getSessionId,
@@ -64,6 +65,7 @@ import {
 import { useAdminSecurity } from '../utilis/useAdminSecurity';
 import { downloadOfficialResultsZip } from '../utilis/backup';
 import { APP_BUILD_INFO } from '../utilis/buildInfo';
+import { applyHoldDelta } from '../utilis/holdProgress';
 
 // Map `boxId -> Window` for any opened ContestPage tabs (used for focus/close and best-effort UI sync).
 const openTabs: { [boxId: number]: Window | null } = {};
@@ -619,6 +621,28 @@ const ControlPanel: FC = () => {
       promptStageForGroup(group) === 'previous-rounds' &&
       (status === 'pending' || !!group.requiresPrevRoundsInput)
     );
+  };
+
+  const tiebreakGroupActionabilitySignature = (
+    group:
+      | Pick<TimeTiebreakEligibleGroup, 'context' | 'rank' | 'affectsPodium' | 'members'>
+      | null
+      | undefined,
+  ): string => {
+    if (!group) return '';
+    const memberKey = Array.isArray(group.members)
+      ? group.members
+          .map((member) =>
+            normalizeCompetitorKey(typeof member?.name === 'string' ? member.name : ''),
+          )
+          .filter(Boolean)
+          .sort()
+          .join('|')
+      : '';
+    const context = group.context === 'route' ? 'route' : 'overall';
+    const rank = Number.isFinite(group.rank) ? Math.max(1, Math.trunc(group.rank)) : 0;
+    const podium = group.affectsPodium ? 'podium' : 'non-podium';
+    return `${context}:${rank}:${podium}:${memberKey}`;
   };
 
   const mergeTieBreakHistoryGroups = (
@@ -1461,8 +1485,14 @@ const ControlPanel: FC = () => {
             case 'PROGRESS_UPDATE':
               setHoldClicks((prev) => {
                 const curr = prev[idx] || 0;
-                const next =
-                  msg.delta === 1 ? Math.floor(curr) + 1 : Number((curr + msg.delta).toFixed(1));
+                const configuredMax = Number(listboxesRef.current[idx]?.holdsCount);
+                const next = applyHoldDelta(
+                  curr,
+                  typeof msg.delta === 'number' ? msg.delta : 1,
+                  Number.isFinite(configuredMax) && configuredMax > 0
+                    ? configuredMax
+                    : Number.POSITIVE_INFINITY,
+                );
                 return { ...prev, [idx]: next };
               });
               setUsedHalfHold((prev) => ({ ...prev, [idx]: msg.delta === 0.1 }));
@@ -1470,18 +1500,35 @@ const ControlPanel: FC = () => {
                 safeSetItem(`boxVersion-${idx}`, String(msg.boxVersion));
               }
               break;
-	            case 'SUBMIT_SCORE':
+            case 'SUBMIT_SCORE':
 	              persistRankingEntry(idx, msg.competitor, msg.score, msg.registeredTime);
-	              markCompetitorInListboxes(idx, msg.competitor);
-	              setHoldClicks((prev) => ({ ...prev, [idx]: 0 }));
-	              setUsedHalfHold((prev) => ({ ...prev, [idx]: false }));
-	              setTimerStates((prev) => ({ ...prev, [idx]: 'idle' }));
-	              setTimerSecondsForBox(idx, defaultTimerSec(idx));
-	              clearRegisteredTime(idx);
+                {
+                  const scoredKey = normalizeCompetitorKey(msg.competitor || '');
+                  const wasAlreadyMarked = !!(
+                    scoredKey &&
+                    listboxesRef.current[idx]?.concurenti?.some(
+                      (c) => normalizeCompetitorKey(c?.nume) === scoredKey && !!c?.marked,
+                    )
+                  );
+                  markCompetitorInListboxes(idx, msg.competitor);
+                  if (!wasAlreadyMarked) {
+                    setHoldClicks((prev) => ({ ...prev, [idx]: 0 }));
+                    setUsedHalfHold((prev) => ({ ...prev, [idx]: false }));
+                    setTimerStates((prev) => ({ ...prev, [idx]: 'idle' }));
+                    setTimerSecondsForBox(idx, defaultTimerSec(idx));
+                    clearRegisteredTime(idx);
+                  }
+                }
 	              if (typeof msg.boxVersion === 'number') {
 	                safeSetItem(`boxVersion-${idx}`, String(msg.boxVersion));
 	              }
 	              break;
+            case 'MODIFY_SCORE':
+              persistRankingEntry(idx, msg.competitor, msg.score, msg.registeredTime);
+              if (typeof msg.boxVersion === 'number') {
+                safeSetItem(`boxVersion-${idx}`, String(msg.boxVersion));
+              }
+              break;
             case 'REGISTER_TIME':
               if (typeof msg.registeredTime === 'number') {
                 if (typeof msg.registeredTime === 'number' && !Number.isNaN(msg.registeredTime)) {
@@ -1714,6 +1761,15 @@ const ControlPanel: FC = () => {
                     started: timerStatesRef.current[idx] === 'running',
                     timerState: timerStatesRef.current[idx] || 'idle',
                     holdCount: holdClicksRef.current[idx] ?? 0,
+                    remaining:
+                      typeof controlTimersRef.current[idx] === 'number' &&
+                      Number.isFinite(controlTimersRef.current[idx])
+                        ? controlTimersRef.current[idx]
+                        : (() => {
+                            const raw = safeGetItem(`timer-${idx}`);
+                            const parsed = raw != null ? parseInt(raw, 10) : Number.NaN;
+                            return Number.isFinite(parsed) ? parsed : undefined;
+                          })(),
                     registeredTime: registeredTimesRef.current[idx],
                     timerPreset: getTimerPreset(idx),
                     timerPresetSec: defaultTimerSec(idx),
@@ -1928,6 +1984,10 @@ const ControlPanel: FC = () => {
       bc.onmessage = (ev) => {
         const { boxId, remaining } = ev.data || {};
         if (typeof boxId === 'number' && typeof remaining === 'number') {
+          lastExternalTimerSyncAtRef.current[boxId] = Date.now();
+          timerEngineEndAtMsRef.current[boxId] = null;
+          delete timerEngineLastRemainingRef.current[boxId];
+          delete timerEngineLastSentAtRef.current[boxId];
           setControlTimers((prev) => ({ ...prev, [boxId]: remaining }));
           if (remaining <= 0) {
             setTimerStates((prev) => ({ ...prev, [boxId]: 'idle' }));
@@ -1943,6 +2003,10 @@ const ControlPanel: FC = () => {
         const data = JSON.parse(e.newValue);
         const { boxId, remaining } = data || {};
         if (typeof boxId === 'number' && typeof remaining === 'number') {
+          lastExternalTimerSyncAtRef.current[boxId] = Date.now();
+          timerEngineEndAtMsRef.current[boxId] = null;
+          delete timerEngineLastRemainingRef.current[boxId];
+          delete timerEngineLastSentAtRef.current[boxId];
           setControlTimers((prev) => ({ ...prev, [boxId]: remaining }));
           if (remaining <= 0) {
             setTimerStates((prev) => ({ ...prev, [boxId]: 'idle' }));
@@ -3914,6 +3978,12 @@ const ControlPanel: FC = () => {
   const showTieBreaksEnabled = scoringBoxSelected;
   const scoringTieBreakSnapshot =
     scoringBoxId != null ? timeTiebreakByBox[scoringBoxId] : undefined;
+  const scoringTieBreakQueuedPrevPrompts =
+    scoringBoxId == null
+      ? []
+      : timeTiebreakPromptQueue.filter(
+          (prompt) => prompt.boxId === scoringBoxId && prompt.stage === 'previous-rounds',
+        );
   const scoringTieBreakEligibleGroups = Array.isArray(scoringTieBreakSnapshot?.eligibleGroups)
     ? scoringTieBreakSnapshot.eligibleGroups
     : [];
@@ -3926,6 +3996,93 @@ const ControlPanel: FC = () => {
     },
     {} as Record<string, TimeTiebreakEligibleGroup>,
   );
+  const scoringTieBreakEligibleByLineageKey = scoringTieBreakEligibleGroups.reduce(
+    (acc, group) => {
+      const lineageKey =
+        typeof group?.lineageKey === 'string' && group.lineageKey.trim()
+          ? group.lineageKey.trim()
+          : '';
+      if (lineageKey) {
+        acc[lineageKey] = group;
+      }
+      return acc;
+    },
+    {} as Record<string, TimeTiebreakEligibleGroup>,
+  );
+  const scoringTieBreakEligibleBySignature = scoringTieBreakEligibleGroups.reduce(
+    (acc, group) => {
+      const signature = tiebreakGroupActionabilitySignature(group);
+      if (signature) {
+        acc[signature] = group;
+      }
+      return acc;
+    },
+    {} as Record<string, TimeTiebreakEligibleGroup>,
+  );
+  const scoringTieBreakQueuedPrevByFingerprint = scoringTieBreakQueuedPrevPrompts.reduce(
+    (acc, prompt) => {
+      if (prompt?.fingerprint) {
+        acc[prompt.fingerprint] = prompt.group;
+      }
+      return acc;
+    },
+    {} as Record<string, TimeTiebreakEligibleGroup>,
+  );
+  const scoringTieBreakQueuedPrevByLineageKey = scoringTieBreakQueuedPrevPrompts.reduce(
+    (acc, prompt) => {
+      const lineageKey =
+        typeof prompt.group?.lineageKey === 'string' && prompt.group.lineageKey.trim()
+          ? prompt.group.lineageKey.trim()
+          : '';
+      if (lineageKey) {
+        acc[lineageKey] = prompt.group;
+      }
+      return acc;
+    },
+    {} as Record<string, TimeTiebreakEligibleGroup>,
+  );
+  const scoringTieBreakQueuedPrevBySignature = scoringTieBreakQueuedPrevPrompts.reduce(
+    (acc, prompt) => {
+      const signature = tiebreakGroupActionabilitySignature(prompt.group);
+      if (signature) {
+        acc[signature] = prompt.group;
+      }
+      return acc;
+    },
+    {} as Record<string, TimeTiebreakEligibleGroup>,
+  );
+  const findActionablePrevRoundsGroup = (
+    group: TimeTiebreakEligibleGroup | null | undefined,
+  ): TimeTiebreakEligibleGroup | null => {
+    if (!group) return null;
+    const fingerprint =
+      typeof group.fingerprint === 'string' && group.fingerprint.trim()
+        ? group.fingerprint.trim()
+        : '';
+    const lineageKey =
+      typeof group.lineageKey === 'string' && group.lineageKey.trim()
+        ? group.lineageKey.trim()
+        : '';
+    const signature = tiebreakGroupActionabilitySignature(group);
+    const candidates = [
+      fingerprint ? scoringTieBreakQueuedPrevByFingerprint[fingerprint] : null,
+      fingerprint ? scoringTieBreakEligibleByFingerprint[fingerprint] : null,
+      lineageKey ? scoringTieBreakQueuedPrevByLineageKey[lineageKey] : null,
+      lineageKey ? scoringTieBreakEligibleByLineageKey[lineageKey] : null,
+      signature ? scoringTieBreakQueuedPrevBySignature[signature] : null,
+      signature ? scoringTieBreakEligibleBySignature[signature] : null,
+    ];
+    const matched = candidates.find((candidate) => isPendingPreviousRoundsPrompt(candidate));
+    if (matched) return matched;
+    if (
+      isPendingPreviousRoundsPrompt(group) &&
+      !!scoringTieBreakSnapshot?.hasEligibleTie &&
+      !scoringTieBreakSnapshot?.isResolved
+    ) {
+      return group;
+    }
+    return null;
+  };
   const scoringTieBreakGroups = Array.isArray(scoringTieBreakSnapshot?.historyGroups)
     ? scoringTieBreakSnapshot?.historyGroups
     : [];
@@ -4447,10 +4604,7 @@ const ControlPanel: FC = () => {
                             : 'pending';
                         const stageLabel = group.stage === 'time' ? 'TB Time' : 'TB Prev';
                         const contextLabel = group.context === 'route' ? 'Active route' : 'Overall';
-                        const actionableGroup =
-                          group.fingerprint
-                            ? scoringTieBreakEligibleByFingerprint[group.fingerprint]
-                            : undefined;
+                        const actionableGroup = findActionablePrevRoundsGroup(group);
                         const canResolveNow = isPendingPreviousRoundsPrompt(actionableGroup);
                         const showHistoricalPendingNote =
                           !canResolveNow &&
@@ -4596,16 +4750,29 @@ const ControlPanel: FC = () => {
         scores={editScores}
         times={editTimes}
         onClose={() => setShowModifyModal(false)}
-        onSubmit={(name: string, newScore: number, newTime: number | null) => {
+        onSubmit={async (name: string, newScore: number, newTime: number | null) => {
           if (scoringBoxId == null) return;
-          persistRankingEntry(scoringBoxId, name, newScore, newTime);
-          submitScore(
-            scoringBoxId,
-            newScore,
-            name,
-            typeof newTime === 'number' ? newTime : undefined,
-          );
-          setShowModifyModal(false);
+          try {
+            const result: any = await modifyScore(
+              scoringBoxId,
+              newScore,
+              name,
+              typeof newTime === 'number' ? newTime : undefined,
+            );
+            if (result?.status === 'ignored') {
+              showRankingStatus(
+                scoringBoxId,
+                `MODIFY_SCORE ignored by backend (${result.reason || 'unknown'}).`,
+                'error',
+              );
+              return;
+            }
+            persistRankingEntry(scoringBoxId, name, newScore, newTime);
+            setShowModifyModal(false);
+          } catch (err) {
+            debugError(`MODIFY_SCORE failed (box ${scoringBoxId})`, err);
+            showRankingStatus(scoringBoxId, 'Failed to modify score', 'error');
+          }
         }}
       />
 

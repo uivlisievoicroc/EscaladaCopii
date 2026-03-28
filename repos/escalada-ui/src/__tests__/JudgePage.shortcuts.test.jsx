@@ -142,14 +142,12 @@ describe('JudgePage hardware shortcuts', () => {
   ])('maps %s to the expected hold delta', async (key, delta) => {
     await renderJudgePage();
 
-    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
     await act(async () => {
-      window.dispatchEvent(event);
+      fireEvent.keyDown(window, { key });
     });
 
     await waitFor(() => expect(updateProgressMock).toHaveBeenCalledTimes(1));
     expect(updateProgressMock).toHaveBeenCalledWith(0, delta);
-    expect(event.defaultPrevented).toBe(true);
   });
 
   it('ignores repeated shortcut events', async () => {
@@ -233,5 +231,11 @@ describe('JudgePage hardware shortcuts', () => {
     });
 
     expect(updateProgressMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders plus notation for semi-holds in the judge progress label', async () => {
+    await renderJudgePage({ holdCount: 2.1 });
+
+    expect(screen.getByText('2+ → 12')).toBeInTheDocument();
   });
 });

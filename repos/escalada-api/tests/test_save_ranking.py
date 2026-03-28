@@ -76,6 +76,50 @@ class ToSecondsTest(unittest.TestCase):
         self.assertIsNone(_to_seconds("invalid:time"))
 
 
+class LeadScoreDisplayTest(unittest.TestCase):
+    def test_format_lead_score_display_variants(self):
+        from escalada.api.save_ranking_tables import format_lead_score_display
+
+        self.assertIsNone(format_lead_score_display(None))
+        self.assertEqual(format_lead_score_display(9.1), "9+")
+        self.assertEqual(format_lead_score_display(9.0), "9")
+        self.assertEqual(format_lead_score_display(20.0, holds_count=20), "TOP")
+        self.assertEqual(format_lead_score_display(12.5), "12.5")
+
+    def test_overall_score_columns_use_display_format(self):
+        from escalada.api.save_ranking import (
+            RankingIn,
+            _build_overall_df,
+            _format_overall_score_columns_for_display,
+        )
+
+        payload = RankingIn(
+            categorie="Test",
+            route_count=1,
+            scores={
+                "Ana": [9.1],
+                "Bob": [9.0],
+                "Cara": [20.0],
+                "Dan": [12.5],
+            },
+            holds_counts=[20],
+            active_holds_count=20,
+            clubs={},
+        )
+        df = _build_overall_df(payload)
+        _format_overall_score_columns_for_display(
+            df,
+            route_count=payload.route_count,
+            holds_counts=payload.holds_counts,
+            active_holds_count=payload.active_holds_count,
+        )
+        by_name = df.set_index("Nume")
+        self.assertEqual(str(by_name.loc["Ana", "Score R1"]), "9+")
+        self.assertEqual(str(by_name.loc["Bob", "Score R1"]), "9")
+        self.assertEqual(str(by_name.loc["Cara", "Score R1"]), "TOP")
+        self.assertEqual(str(by_name.loc["Dan", "Score R1"]), "12.5")
+
+
 class BuildRankingDataTest(unittest.TestCase):
     """Test ranking calculation functions"""
 

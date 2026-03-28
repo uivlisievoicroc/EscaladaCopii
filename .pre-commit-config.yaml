@@ -3,11 +3,11 @@ repos:
     rev: 25.12.0
     hooks:
       - id: black
-        files: ^Escalada/escalada/.*\.py$
+        files: ^repos/(escalada-api/escalada|escalada-core/escalada_core)/.*\.py$
         args: ["--line-length", "100"]
   - repo: https://github.com/PyCQA/isort
     rev: 5.13.2
     hooks:
       - id: isort
-        files: ^Escalada/escalada/.*\.py$
+        files: ^repos/(escalada-api/escalada|escalada-core/escalada_core)/.*\.py$
         args: ["--profile", "black"]

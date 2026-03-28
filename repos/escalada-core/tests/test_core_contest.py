@@ -94,6 +94,99 @@ def test_submit_score_marks_competitor_and_resets_timer():
     assert outcome.state["currentClimber"] == ""
 
 
+def test_modify_score_preserves_live_flow_for_current_climber():
+    state = default_state("sid-modify")
+    apply_command(
+        state,
+        {
+            "type": "INIT_ROUTE",
+            "boxId": 1,
+            "competitors": [{"nume": "Alice"}, {"nume": "Bianca"}],
+            "routeIndex": 1,
+            "holdsCount": 4,
+        },
+    )
+    apply_command(state, {"type": "START_TIMER"})
+    apply_command(state, {"type": "PROGRESS_UPDATE", "delta": 1})
+    apply_command(
+        state,
+        {
+            "type": "SUBMIT_SCORE",
+            "competitor": "Alice",
+            "score": 7.5,
+            "registeredTime": 12.3,
+        },
+    )
+    apply_command(state, {"type": "START_TIMER"})
+    apply_command(state, {"type": "PROGRESS_UPDATE", "delta": 1})
+
+    outcome = apply_command(
+        state,
+        {
+            "type": "MODIFY_SCORE",
+            "competitor": "Alice",
+            "score": 8.5,
+            "registeredTime": 13.0,
+        },
+    )
+
+    assert outcome.snapshot_required
+    assert outcome.state["scores"]["Alice"][0] == 8.5
+    assert outcome.state["times"]["Alice"][0] == 13.0
+    assert outcome.state["timerState"] == "running"
+    assert outcome.state["started"] is True
+    assert outcome.state["holdCount"] == 1.0
+    assert outcome.state["currentClimber"] == "Bianca"
+    assert outcome.state["preparingClimber"] == ""
+    assert outcome.state["competitors"][0]["marked"] is True
+    assert outcome.state["competitors"][1]["marked"] is False
+
+
+def test_duplicate_submit_for_marked_competitor_preserves_live_flow():
+    state = default_state("sid-legacy-edit")
+    apply_command(
+        state,
+        {
+            "type": "INIT_ROUTE",
+            "boxId": 1,
+            "competitors": [{"nume": "Alice"}, {"nume": "Bianca"}],
+            "routeIndex": 1,
+            "holdsCount": 4,
+        },
+    )
+    apply_command(state, {"type": "START_TIMER"})
+    apply_command(state, {"type": "PROGRESS_UPDATE", "delta": 1})
+    apply_command(
+        state,
+        {
+            "type": "SUBMIT_SCORE",
+            "competitor": "Alice",
+            "score": 7.5,
+            "registeredTime": 12.3,
+        },
+    )
+    apply_command(state, {"type": "START_TIMER"})
+    apply_command(state, {"type": "PROGRESS_UPDATE", "delta": 1})
+
+    outcome = apply_command(
+        state,
+        {
+            "type": "SUBMIT_SCORE",
+            "competitor": "Alice",
+            "score": 8.5,
+        },
+    )
+
+    assert outcome.snapshot_required
+    assert outcome.state["scores"]["Alice"][0] == 8.5
+    assert outcome.state["times"]["Alice"][0] == 12.3
+    assert outcome.state["timerState"] == "running"
+    assert outcome.state["started"] is True
+    assert outcome.state["holdCount"] == 1.0
+    assert outcome.state["currentClimber"] == "Bianca"
+    assert outcome.state["preparingClimber"] == ""
+
+
 def test_reset_box_generates_new_session_and_clears_state():
     state = default_state("sid-3")
     apply_command(
@@ -274,6 +367,13 @@ def test_init_route_preserves_scores_for_next_route_and_clears_on_route_1():
 
 def test_validation_accepts_submit_score_idx_alias():
     cmd = ValidatedCmd(boxId=1, type="SUBMIT_SCORE", idx=0, score=5.0)
+    assert cmd.idx == 0
+    assert cmd.competitor is None
+    assert cmd.competitorIdx is None
+
+
+def test_validation_accepts_modify_score_idx_alias():
+    cmd = ValidatedCmd(boxId=1, type="MODIFY_SCORE", idx=0, score=5.0)
     assert cmd.idx == 0
     assert cmd.competitor is None
     assert cmd.competitorIdx is None

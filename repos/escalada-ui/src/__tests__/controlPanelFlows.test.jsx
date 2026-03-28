@@ -624,6 +624,88 @@ describe('ControlPanel button flows', () => {
     expect(screen.queryByRole('button', { name: 'Resolve now' })).not.toBeInTheDocument();
   });
 
+  it('keeps Resolve now available for pending TB Prev overview items when the snapshot is unresolved but eligibleGroups are temporarily missing', async () => {
+    const pendingGroup = buildPrevRoundsPendingEvent({
+      fingerprint: 'tb-prev-r4-stale-snapshot',
+      members: [
+        { name: 'Cinca Albert', time: 1, value: 4.5 },
+        { name: 'Scutelnicu Ilie Nicolas', time: 156, value: 4.5 },
+      ],
+      missingPrevRoundsMembers: ['Cinca Albert', 'Scutelnicu Ilie Nicolas'],
+    });
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).includes('/api/state/0')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-0',
+            boxVersion: 3,
+            timeCriterionEnabled: true,
+            timeTiebreakHasEligibleTie: true,
+            leadRankingResolved: false,
+            leadTieEvents: [pendingGroup],
+          }),
+        };
+      }
+      if (String(url).includes('/api/state/1')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sessionId: 'sid-1',
+            boxVersion: 1,
+            timeCriterionEnabled: true,
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <ControlPanel />
+        </MemoryRouter>,
+      );
+    });
+
+    expect(
+      await screen.findByText(/Set previous-round rank for each newly tied athlete/i),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/Set previous-round rank for each newly tied athlete/i),
+      ).not.toBeInTheDocument();
+    });
+
+    await emitControlPanelSnapshot(0, {
+      sessionId: 'sid-0',
+      boxVersion: 4,
+      timeCriterionEnabled: true,
+      timeTiebreakHasEligibleTie: true,
+      leadRankingResolved: false,
+      leadTieEvents: [],
+    });
+
+    await openActionsSection();
+    const showButtons = await screen.findAllByRole('button', { name: 'Show Tie-breaks' });
+    fireEvent.click(showButtons[0]);
+    expect(await screen.findByText('Tie-break overview')).toBeInTheDocument();
+    expect(screen.getByText('Overall rank #4')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resolve now' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve now' }));
+    await waitFor(() => {
+      expect(screen.queryByText('Tie-break overview')).not.toBeInTheDocument();
+    });
+    expect(
+      await screen.findByText(/Set previous-round rank for each newly tied athlete/i),
+    ).toBeInTheDocument();
+    expect((await screen.findAllByText('Cinca Albert')).length).toBeGreaterThan(0);
+  });
+
   it('submits SUBMIT_SCORE using competitor from backend state', async () => {
     const calls = [];
     global.fetch = vi.fn(async (url, init) => {

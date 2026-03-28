@@ -5,11 +5,12 @@
 // - WebSocket provides authoritative state (`STATE_SNAPSHOT` + command echoes)
 // - Local countdown provides smooth animation between server updates
 // - localStorage + postMessage act as fallback bridges between tabs (ControlPanel/JudgePage/ContestPage)
-import React, { useEffect, useState, useRef, useCallback, FC } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useId, FC } from 'react';
 import { useParams } from 'react-router-dom';
 import { debugLog, debugError, debugWarn } from '../utilis/debug';
 import { safeSetItem, safeGetItem, safeRemoveItem, safeGetJSON, storageKey } from '../utilis/storage';
 import { sanitizeBoxName, sanitizeCompetitorName, normalizeCompetitorKey } from '../utilis/sanitize';
+import { applyHoldDelta, formatHoldDisplay, getHoldProgressRatio } from '../utilis/holdProgress';
 import type { Competitor, WebSocketMessage } from '../types';
 // (WebSocket logic moved into component)
 
@@ -30,7 +31,7 @@ interface RouteProgressProps {
 }
 
 interface ScoresByName {
-  [name: string]: number[];
+  [name: string]: (number | undefined)[];
 }
 
 interface TimesByName {
@@ -85,6 +86,10 @@ const RouteProgress: FC<RouteProgressProps> = ({
   w = 20,
   tilt = 5,
 }) => {
+  const svgId = useId().replace(/:/g, '');
+  const gradientId = `${svgId}-progress-gradient`;
+  const connectorGlowId = `${svgId}-connector-glow`;
+  const trackGlowId = `${svgId}-track-glow`;
   const phi = (6 + Math.sqrt(12)) / 2;
   let rem = h;
   const rawSegs = Array.from({ length: 8 }, () => {
@@ -95,6 +100,7 @@ const RouteProgress: FC<RouteProgressProps> = ({
   const sumRaw = rawSegs.reduce((sum, s) => sum + s, 0);
   const scaledSegs = rawSegs.map((s) => s * (h / sumRaw));
   const segs = scaledSegs.reverse();
+  const markerLabel = formatHoldDisplay(current);
   // build points along the path
   const points = [[0, h]];
   segs.forEach((seg, i) => {
@@ -106,7 +112,7 @@ const RouteProgress: FC<RouteProgressProps> = ({
   });
   // compute dot position by length
   const totalLen = segs.reduce((a, b) => a + b, 0);
-  const target = (holds > 1 ? current / (holds - 1) : 0) * totalLen;
+  const target = getHoldProgressRatio(current, holds) * totalLen;
   let accumulated = 0;
   let dotX = 0,
     dotY = 0;
@@ -121,24 +127,52 @@ const RouteProgress: FC<RouteProgressProps> = ({
     }
     accumulated += segs[i];
   }
-  const pathD = 'M ' + points.map((p) => p.join(',')).join(' L ');
   const trackWidth = w * 0.35;
+  const markerWidth = Math.max(trackWidth * 4.6, markerLabel.length * trackWidth * 2);
+  const markerHeight = trackWidth * 2.7;
+  const markerFontSize =
+    markerLabel.length >= 3
+      ? trackWidth * 1.02
+      : markerLabel.length === 2
+        ? trackWidth * 1.12
+        : trackWidth * 1.22;
+  const pointXs = points.map(([x]) => x);
+  const minX = Math.min(...pointXs);
+  const maxX = Math.max(...pointXs);
+  const railWidth = maxX - minX;
+  const railPadding = trackWidth * 2.4;
+  const markerGap = trackWidth * 1.5;
+  const translatedPoints = points.map(([x, y]) => [x - minX + railPadding, y] as const);
+  const translatedDotX = dotX - minX + railPadding;
+  const markerCenterX = railPadding + railWidth + markerGap + markerWidth / 2;
+  const viewWidth = railPadding * 2 + railWidth + markerGap + markerWidth;
+  const connectorStartX = translatedDotX + trackWidth * 0.7;
+  const connectorEndX = markerCenterX - markerWidth / 2 + trackWidth * 0.15;
+  const pathD = 'M ' + translatedPoints.map((p) => p.join(',')).join(' L ');
   return (
-    <svg width={w + 20} height={h} className="block overflow-visible">
+    <svg width={viewWidth} height={h} className="block overflow-visible">
       <defs>
-        <linearGradient id="progressGradient" x1="0" y1="1" x2="0" y2="0">
+        <linearGradient id={gradientId} x1="0" y1="1" x2="0" y2="0">
           <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.9" />
           <stop offset="50%" stopColor="#0ea5e9" stopOpacity="0.7" />
           <stop offset="100%" stopColor="#0f172a" stopOpacity="0.3" />
         </linearGradient>
-        <filter id="dotGlow">
-          <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+        <linearGradient id={`${svgId}-marker-fill`} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="rgba(255,255,255,0.22)" />
+          <stop offset="100%" stopColor="rgba(15,23,42,0.64)" />
+        </linearGradient>
+        <linearGradient id={`${svgId}-marker-sheen`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(224,242,254,0.18)" />
+          <stop offset="100%" stopColor="rgba(224,242,254,0)" />
+        </linearGradient>
+        <filter id={connectorGlowId}>
+          <feGaussianBlur stdDeviation="1.8" result="coloredBlur"/>
           <feMerge>
             <feMergeNode in="coloredBlur"/>
             <feMergeNode in="SourceGraphic"/>
           </feMerge>
         </filter>
-        <filter id="trackGlow">
+        <filter id={trackGlowId}>
           <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
           <feMerge>
             <feMergeNode in="coloredBlur"/>
@@ -158,16 +192,70 @@ const RouteProgress: FC<RouteProgressProps> = ({
       <path
         d={pathD}
         fill="none"
-        stroke="url(#progressGradient)"
+        stroke={`url(#${gradientId})`}
         strokeWidth={trackWidth}
         strokeLinecap="round"
-        filter="url(#trackGlow)"
+        filter={`url(#${trackGlowId})`}
       />
-      {/* Climber dot with halo */}
-      <circle cx={dotX} cy={dotY} r={trackWidth * 2.2} fill="#22d3ee" opacity="0.25" />
-      <circle cx={dotX} cy={dotY} r={trackWidth * 1.8} fill="#fbbf24" filter="url(#dotGlow)" />
-      <circle cx={dotX} cy={dotY} r={trackWidth * 1.3} fill="#fde047" />
-      <circle cx={dotX} cy={dotY} r={trackWidth * 0.9} fill="#fef08a" />
+      <g
+        data-testid="route-progress-marker-connector"
+        fill="none"
+        strokeLinecap="round"
+        filter={`url(#${connectorGlowId})`}
+      >
+        <path
+          d={`M ${connectorStartX},${dotY} L ${connectorEndX},${dotY}`}
+          stroke="rgba(34,211,238,0.28)"
+          strokeWidth={trackWidth * 0.95}
+        />
+        <path
+          d={`M ${connectorStartX},${dotY} L ${connectorEndX},${dotY}`}
+          stroke="rgba(224,242,254,0.52)"
+          strokeWidth={trackWidth * 0.24}
+        />
+      </g>
+      <g data-testid="route-progress-marker" transform={`translate(${markerCenterX} ${dotY})`}>
+        <rect
+          x={-markerWidth / 2}
+          y={-markerHeight / 2}
+          width={markerWidth}
+          height={markerHeight}
+          rx={markerHeight / 2}
+          fill="rgba(15,23,42,0.58)"
+          stroke="rgba(224,242,254,0.16)"
+          strokeWidth="1"
+        />
+        <rect
+          x={-markerWidth / 2}
+          y={-markerHeight / 2}
+          width={markerWidth}
+          height={markerHeight}
+          rx={markerHeight / 2}
+          fill={`url(#${svgId}-marker-fill)`}
+          opacity="0.95"
+        />
+        <rect
+          x={-markerWidth / 2}
+          y={-markerHeight / 2}
+          width={markerWidth}
+          height={markerHeight * 0.54}
+          rx={markerHeight / 2}
+          fill={`url(#${svgId}-marker-sheen)`}
+          opacity="0.9"
+        />
+        <text
+          data-testid="route-progress-marker-label"
+          x="0"
+          y={markerFontSize * 0.34}
+          textAnchor="middle"
+          fontSize={markerFontSize}
+          fontWeight="900"
+          fill="#e0f2fe"
+          style={{ letterSpacing: '-0.03em' }}
+        >
+          {markerLabel}
+        </text>
+      </g>
     </svg>
   );
 };
@@ -337,9 +425,18 @@ const ContestPage: FC = () => {
           typeof msg.timerPresetSec === 'number' && Number.isFinite(msg.timerPresetSec)
             ? Math.max(0, Math.ceil(msg.timerPresetSec))
             : null;
+        const persistedRaw = safeGetItem(`timer-${boxId}`);
+        const persistedParsed =
+          typeof persistedRaw === 'string' ? parseInt(persistedRaw, 10) : Number.NaN;
+        const liveFallback =
+          typeof timerSecRef.current === 'number' && Number.isFinite(timerSecRef.current)
+            ? Math.max(0, Math.ceil(timerSecRef.current))
+            : Number.isFinite(persistedParsed)
+              ? Math.max(0, Math.ceil(persistedParsed))
+              : null;
 
         if (msg.timerState === 'running') {
-          const sec = remainingSec ?? presetFallback;
+          const sec = remainingSec ?? liveFallback ?? presetFallback;
           if (typeof sec === 'number') {
             setTimerSec(sec);
             timerSecRef.current = sec;
@@ -356,7 +453,7 @@ const ContestPage: FC = () => {
             broadcastRemaining(sec);
           }
         } else if (msg.timerState === 'paused') {
-          const sec = remainingSec ?? presetFallback;
+          const sec = remainingSec ?? liveFallback ?? presetFallback;
           if (typeof sec === 'number') {
             if (rafRef.current) cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
@@ -384,6 +481,28 @@ const ContestPage: FC = () => {
         if (typeof msg.timeCriterionEnabled === 'boolean') {
           setTimeCriterionEnabled(msg.timeCriterionEnabled);
           safeSetItem(`timeCriterionEnabled-${boxId}`, msg.timeCriterionEnabled ? 'on' : 'off');
+        }
+        if (msg.scoresByName && typeof msg.scoresByName === 'object') {
+          const nextRanking = Object.entries(msg.scoresByName).reduce((acc, [name, rawScores]) => {
+            if (!name || !Array.isArray(rawScores)) return acc;
+            acc[name] = rawScores.map((value) =>
+              typeof value === 'number' && !Number.isNaN(value) ? value : undefined,
+            );
+            return acc;
+          }, {} as ScoresByName);
+          setRanking(nextRanking);
+          safeSetItem(`ranking-${boxId}`, JSON.stringify(nextRanking));
+        }
+        if (msg.timesByName && typeof msg.timesByName === 'object') {
+          const nextTimes = Object.entries(msg.timesByName).reduce((acc, [name, rawTimes]) => {
+            if (!name || !Array.isArray(rawTimes)) return acc;
+            acc[name] = rawTimes.map((value) =>
+              typeof value === 'number' && !Number.isNaN(value) ? value : undefined,
+            );
+            return acc;
+          }, {} as TimesByName);
+          setRankingTimes(nextTimes);
+          safeSetItem(`rankingTimes-${boxId}`, JSON.stringify(nextTimes));
         }
         setTimeTiebreakPreference(
           (msg as any).timeTiebreakPreference === 'yes' || (msg as any).timeTiebreakPreference === 'no'
@@ -946,9 +1065,6 @@ const ContestPage: FC = () => {
       if (lastTimerSyncRef.current !== remaining) {
         lastTimerSyncRef.current = remaining;
         const sessionId = safeGetItem(`sessionId-${boxId}`) || undefined;
-        const rawVersion = safeGetItem(`boxVersion-${boxId}`);
-        const parsedVersion = rawVersion ? parseInt(rawVersion, 10) : NaN;
-        const boxVersion = Number.isFinite(parsedVersion) ? parsedVersion : undefined;
         if (!sessionId) return;
         fetch(API_CMD, {
           method: 'POST',
@@ -959,7 +1075,6 @@ const ContestPage: FC = () => {
             type: 'TIMER_SYNC',
             remaining,
             sessionId,
-            boxVersion,
           }),
         }).catch((err) => debugError('Failed to sync timer to backend', err));
       }
@@ -1049,13 +1164,7 @@ const ContestPage: FC = () => {
     const onProgressUpdate = (e: MessageEvent<WindowMessage>) => {
       if (e.data?.type === 'PROGRESS_UPDATE' && +e.data.boxId === +boxId) {
         const delta = typeof e.data.delta === 'number' ? e.data.delta : 1;
-        setCurrentHold((prev) => {
-          // If we're applying a full hold after a semi-hold, drop fractional part
-          if (delta === 1 && prev % 1 !== 0) {
-            return Math.min(Math.floor(prev) + 1, holdsCount);
-          }
-          return Math.min(prev + delta, holdsCount);
-        });
+        setCurrentHold((prev) => applyHoldDelta(prev, delta, holdsCount || Number.POSITIVE_INFINITY));
       }
     };
     window.addEventListener('message', onProgressUpdate);

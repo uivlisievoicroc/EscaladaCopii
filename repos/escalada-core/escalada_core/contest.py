@@ -26,6 +26,7 @@ State transitions:
 - INIT_ROUTE: Starts a new route, resets queue, preserves multi-route scores
 - PROGRESS_UPDATE: Increments holdCount (supports +1 or +0.1 for half-holds)
 - SUBMIT_SCORE: Marks competitor as done, advances queue, stores score + optional time
+- MODIFY_SCORE: Updates an existing score/time without changing live contest state
 - RESET_PARTIAL: Allows selective reset (timer/progress/unmark) without full restart
 - RESET_BOX: Full reset to default_state() with new sessionId
 """
@@ -38,7 +39,7 @@ from typing import Any, Dict, List, Tuple
 
 from .commands.init_route import apply_init_route
 from .commands.reset import apply_reset_box, apply_reset_partial
-from .commands.submit_score import apply_submit_score
+from .commands.submit_score import apply_modify_score, apply_submit_score
 from .commands.timer import apply_timer_and_progress
 from .validation import InputSanitizer
 
@@ -313,6 +314,7 @@ def _apply_transition(state: Dict[str, Any], cmd: Dict[str, Any]) -> CommandOutc
         - START_TIMER/STOP_TIMER/RESUME_TIMER: Control timer state
         - PROGRESS_UPDATE: Increment holdCount (supports +1 or +0.1)
         - SUBMIT_SCORE: Mark competitor done, advance queue, store score + time
+        - MODIFY_SCORE: Correct a stored score/time without changing timer or queue
         - REGISTER_TIME: Store lastRegisteredTime for tiebreaking
         - TIMER_SYNC: Update remaining time (server-side ticker)
         - SET_TIMER_PRESET: Change timer duration
@@ -356,6 +358,16 @@ def _apply_transition(state: Dict[str, Any], cmd: Dict[str, Any]) -> CommandOutc
             coerce_optional_time=_coerce_optional_time,
             coerce_idx=_coerce_idx,
             compute_preparing_climber=_compute_preparing_climber,
+        )
+        snapshot_required = True
+
+    elif ctype == "MODIFY_SCORE":
+        apply_modify_score(
+            new_state,
+            cmd,
+            payload,
+            coerce_optional_time=_coerce_optional_time,
+            coerce_idx=_coerce_idx,
         )
         snapshot_required = True
 
@@ -569,6 +581,8 @@ def validate_session_and_version(
         return ValidationError(kind="stale_session")
 
     incoming_version = cmd.get("boxVersion")
+    if cmd.get("type") == "TIMER_SYNC":
+        incoming_version = None
     current_version = state.get("boxVersion", 0)
     if incoming_version is not None and incoming_version < current_version:
         return ValidationError(kind="stale_version")

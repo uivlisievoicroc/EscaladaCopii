@@ -31,6 +31,7 @@
 import React, { FC, useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { backoffDelayMs, buildWsUrl, parseWsJson, replyPong } from '../utilis/wsClient';
+import { formatHoldDisplay, getHoldProgressRatio } from '../utilis/holdProgress';
 
 /**
  * WebSocket Configuration
@@ -229,7 +230,7 @@ const PublicLiveClimbing: FC = () => {
           if (typeof data.remaining === 'number' && Number.isFinite(data.remaining)) {
             remainingBaseRef.current = { atMs: Date.now(), remaining: data.remaining };
             setDisplayRemaining(data.remaining);
-          } else {
+          } else if (data.timerState !== 'running') {
             remainingBaseRef.current = null;
             setDisplayRemaining(null);
           }
@@ -444,14 +445,14 @@ const PublicLiveClimbing: FC = () => {
   const renderHoldsProgress = () => {
     if (!state) return null;
     const { holdCount, holdsCount } = state;
-    const percentage = holdsCount > 0 ? (holdCount / holdsCount) * 100 : 0;
+    const percentage = getHoldProgressRatio(holdCount, holdsCount) * 100;
 
     return (
       <div className="w-full">
         <div className="flex justify-between text-sm text-slate-400 mb-2">
           <span>Progress</span>
           <span>
-            {holdCount} / {holdsCount} holds
+            {formatHoldDisplay(holdCount)} / {formatHoldDisplay(holdsCount)} holds
           </span>
         </div>
         <div className="h-4 bg-slate-700 rounded-full overflow-hidden">

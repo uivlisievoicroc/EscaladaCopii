@@ -80,7 +80,7 @@ describe('RankingsPage', () => {
     expect(row).not.toBeNull();
     if (row) {
       expect(within(row).getByText('—')).toBeInTheDocument();
-      expect(within(row).getByText('6.0')).toBeInTheDocument();
+      expect(within(row).getByText('6')).toBeInTheDocument();
     }
   });
 });

@@ -27,6 +27,7 @@ import {
   getStoredRole,
   getStoredBoxes,
 } from '../utilis/auth';
+import { applyHoldDelta, formatHoldDisplay } from '../utilis/holdProgress';
 // Shared types and UI primitives used across ControlPanel/ContestPage/JudgePage.
 import type { WebSocketMessage, TimerState, StateSnapshot } from '../types';
 import ModalScore from './ModalScore';
@@ -75,12 +76,16 @@ const JudgePage: FC = () => {
   const [holdCount, setHoldCount] = useState<number>(0);
   // List of competitors for the current route (used to detect when the route has no athletes left).
   const [competitors, setCompetitors] = useState<StateSnapshot['competitors'] | null>(null);
+  const competitorsRef = useRef<StateSnapshot['competitors'] | null>(competitors);
 
   // Keep the latest currentClimber in a ref for WS handlers that shouldn't depend on React state closures.
   const currentClimberRef = useRef<string>('');
   useEffect(() => {
     currentClimberRef.current = currentClimber;
   }, [currentClimber]);
+  useEffect(() => {
+    competitorsRef.current = competitors;
+  }, [competitors]);
 
   // -------------------- UI/network state (local only) --------------------
   // Used to prevent accidental double taps and to drive modal/pending UI states.
@@ -289,10 +294,7 @@ const JudgePage: FC = () => {
           setHoldCount(msg.holdCount);
         } else {
           const delta = typeof msg.delta === 'number' ? msg.delta : 1;
-          setHoldCount((prev) => {
-            if (delta === 1) return Math.floor(prev) + 1;
-            return Number((prev + delta).toFixed(1));
-          });
+          setHoldCount((prev) => applyHoldDelta(prev, delta, maxScore || Number.POSITIVE_INFINITY));
           if (delta === 0.1) setUsedHalfHold(true);
           else setUsedHalfHold(false);
         }
@@ -300,14 +302,14 @@ const JudgePage: FC = () => {
       // After scoring a climber, reset local per-climber UI (timer idle, holds cleared).
       if (msg.type === 'SUBMIT_SCORE') {
         debugLog('🟢 [JudgePage] Applying SUBMIT_SCORE');
-        setTimerState('idle');
-        setUsedHalfHold(false);
-        setHoldCount(0);
         // Mark the just-scored competitor so "no athletes left" can be detected without waiting for a full snapshot.
         const scoredName =
           typeof (msg as any).competitor === 'string'
             ? (msg as any).competitor
             : currentClimberRef.current;
+        const wasAlreadyMarked = Array.isArray(competitorsRef.current)
+          ? competitorsRef.current.some((c) => c?.nume === scoredName && !!c?.marked)
+          : false;
         if (scoredName) {
           setCompetitors((prev) =>
             Array.isArray(prev)
@@ -315,7 +317,12 @@ const JudgePage: FC = () => {
               : prev,
           );
         }
-        clearRegisteredTime();
+        if (!wasAlreadyMarked) {
+          setTimerState('idle');
+          setUsedHalfHold(false);
+          setHoldCount(0);
+          clearRegisteredTime();
+        }
       }
       // Explicitly registered time (optional tiebreak data).
       if (msg.type === 'REGISTER_TIME') {
@@ -925,8 +932,8 @@ const JudgePage: FC = () => {
     totalSec > 0 && Number.isFinite(totalSec)
       ? Math.max(0, Math.min(100, (shownTimerSec / totalSec) * 100))
       : 0;
-  const holdCountLabel = Number.isInteger(holdCount) ? String(holdCount) : holdCount.toFixed(1);
-  const maxScoreLabel = Number.isFinite(maxScore) && maxScore > 0 ? String(maxScore) : '—';
+  const holdCountLabel = formatHoldDisplay(holdCount);
+  const maxScoreLabel = Number.isFinite(maxScore) && maxScore > 0 ? formatHoldDisplay(maxScore) : '—';
   const connectionLabel =
     wsStatus === 'open' ? 'Live' : wsStatus === 'connecting' ? 'Connecting' : 'Offline';
   const connectionPill =
@@ -1130,17 +1137,17 @@ const JudgePage: FC = () => {
                   title={
                     Number(maxScore ?? 0) > 0 && Number(holdCount ?? 0) >= Number(maxScore ?? 0)
                       ? 'Top reached! Climber cannot climb over the top :)'
-                      : 'Add 0.1 hold'
+                      : 'Add plus hold'
                   }
                 >
                   <div className="flex flex-col items-center">
                     <span className="text-xs font-semibold text-white/70">
                       {usedHalfHold ? 'Used' : ' '}
                     </span>
-                    <span className="text-2xl font-black">+0.1</span>
+                    <span className="text-2xl font-black">+</span>
                     <span className="text-xs text-white/60">Hold</span>
                   </div>
-		                </button>
+	                </button>
 		              </div>
 
                 {/* Opens the score modal for the current climber. */}
