@@ -1,0 +1,470 @@
+"""
+Escalada API entrypoint (FastAPI).
+
+This module wires together:
+- App startup/shutdown (lifespan): preload JSON state + start background maintenance tasks
+- Global middleware: request logging + CORS
+- Router registration: public endpoints + admin/ops endpoints
+"""
+
+# -------------------- Standard library imports --------------------
+import asyncio
+import logging
+import os
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+from time import time
+
+# -------------------- Third-party imports --------------------
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+# -------------------- Local application imports --------------------
+from escalada.api import live as live_module
+from escalada.api.audit import router as audit_router
+from escalada.api.auth import router as auth_router
+from escalada.api.backup import (
+    collect_snapshots,
+    router as backup_router,
+    write_backup_file,
+)
+from escalada.api.health import router as health_router
+from escalada.api.license import router as license_router
+from escalada.api.live import router as live_router
+from escalada.api.public import router as public_router
+from escalada.api.ops import router as ops_router
+from escalada.api.podium import router as podium_router
+from escalada.api.save_ranking import router as save_ranking_router
+from escalada.security import (
+    admin_license,
+    admin_session,
+    license_events,
+    recovery_codes,
+    usb_license,
+)
+from escalada.routers.upload import router as upload_router
+from escalada.rate_limit import cleanup_rate_limit_data
+from escalada import runtime_paths, runtime_state
+
+# -------------------- Logging --------------------
+# Log to stdout (for containers/terminal) and also to a local file (useful on event day).
+_log_file_path = Path(os.getenv("ESCALADA_LOG_FILE", "escalada.log"))
+_log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+try:
+    _log_file_path.parent.mkdir(parents=True, exist_ok=True)
+    _log_handlers.append(logging.FileHandler(_log_file_path))
+except Exception:
+    pass
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=_log_handlers,
+)
+
+logger = logging.getLogger(__name__)
+
+# -------------------- Environment configuration --------------------
+# Load `.env` early because we use env vars for CORS, auth, and background task tuning.
+_DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=_DOTENV_PATH, override=False)
+# In local/dev usage it's very common to have stale exported env vars. Prefer the repo `.env` unless
+# explicitly running in production.
+_env_marker = (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower()
+if _env_marker not in {"prod", "production"}:
+    load_dotenv(dotenv_path=_DOTENV_PATH, override=True)
+
+
+def _is_production_env() -> bool:
+    env = (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower()
+    return env in {"prod", "production"}
+
+
+def _is_weak_jwt_secret(secret: str | None) -> bool:
+    normalized = (secret or "").strip()
+    return not normalized or normalized == "dev-secret-change-me"
+
+
+# JWT secret is required for production deployments (dev default is intentionally flagged).
+_jwt_secret = os.getenv("JWT_SECRET")
+if _is_weak_jwt_secret(_jwt_secret):
+    if _is_production_env():
+        raise RuntimeError(
+            "Unsafe production configuration: JWT_SECRET is missing or uses a default development value."
+        )
+    logger.warning(
+        "JWT_SECRET is missing or uses the default value; set a strong JWT_SECRET in the environment for production."
+    )
+
+# Background task tuning (minutes) + backup storage location.
+BACKUP_INTERVAL_MIN = int(os.getenv("BACKUP_INTERVAL_MIN", "10"))
+BACKUP_RETENTION_FILES = int(os.getenv("BACKUP_RETENTION_FILES", "20"))
+BACKUP_DIR = os.getenv("BACKUP_DIR", "backups")
+RATE_LIMIT_CLEANUP_INTERVAL_MIN = int(os.getenv("RATE_LIMIT_CLEANUP_INTERVAL_MIN", "5"))
+USB_WATCHDOG_INTERVAL_SEC = int(os.getenv("USB_WATCHDOG_INTERVAL_SEC", "5"))
+FRONTEND_DIST_DIR = runtime_paths.resolve_frontend_dist_dir()
+FRONTEND_INDEX_FILE = FRONTEND_DIST_DIR / "index.html"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+
+SPA_EXACT_EXCLUDES = {"/docs", "/redoc", "/openapi.json"}
+SPA_PREFIX_EXCLUDES = ("/api", "/assets", "/docs", "/redoc")
+
+# References to asyncio Tasks so we can cancel them cleanly on shutdown.
+backup_task: asyncio.Task | None = None
+rate_limit_cleanup_task: asyncio.Task | None = None
+usb_watchdog_task: asyncio.Task | None = None
+
+
+async def run_migrations() -> None:
+    """Backward-compatible no-op (Postgres/Alembic removed)."""
+    return None
+
+
+def _is_spa_excluded(path: str) -> bool:
+    normalized = path if path.startswith("/") else f"/{path}"
+    if normalized in SPA_EXACT_EXCLUDES:
+        return True
+    return any(
+        normalized == prefix or normalized.startswith(f"{prefix}/")
+        for prefix in SPA_PREFIX_EXCLUDES
+    )
+
+
+def _resolve_frontend_file(path: str) -> Path | None:
+    if not path:
+        return None
+    candidate = (FRONTEND_DIST_DIR / path).resolve()
+    frontend_root = FRONTEND_DIST_DIR.resolve()
+    if frontend_root not in candidate.parents:
+        return None
+    if candidate.is_file():
+        return candidate
+    return None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events for the FastAPI application."""
+
+    # -------------------- Startup --------------------
+    logger.info("🚀 Escalada API starting up (JSON-only)...")
+    frontend_build_info = runtime_paths.read_frontend_build_info(FRONTEND_DIST_DIR)
+    if frontend_build_info:
+        logger.info(
+            "Serving frontend bundle from %s (marker=%s version=%s source_hash=%s built_at=%s)",
+            FRONTEND_DIST_DIR,
+            frontend_build_info.get("marker"),
+            frontend_build_info.get("version"),
+            frontend_build_info.get("sourceHash"),
+            frontend_build_info.get("builtAt"),
+        )
+    else:
+        logger.warning(
+            "Serving frontend bundle from %s without build-info.json. "
+            "Rebuild escalada-ui and/or set ESCALADA_FRONTEND_DIST to the current dist directory.",
+            FRONTEND_DIST_DIR,
+        )
+    try:
+        admin_license_status = admin_license.check_admin_license(force_refresh=True)
+        logger.info(
+            "Admin license status: valid=%s reason=%s",
+            bool(admin_license_status.get("valid")),
+            admin_license_status.get("reason"),
+        )
+    except Exception as exc:
+        logger.warning("Admin license status check failed: %s", exc)
+
+    # Best-effort state preload (allows restarts to pick up where the event left off).
+    try:
+        await live_module.preload_states()
+    except Exception as exc:
+        logger.warning("State preload skipped: %s", exc)
+
+    async def _backup_loop():
+        # Periodically snapshot all box states to JSON files for disaster recovery.
+        output_dir = Path(BACKUP_DIR)
+        while True:
+            try:
+                await asyncio.sleep(max(BACKUP_INTERVAL_MIN, 1) * 60)
+                snaps = await collect_snapshots()
+                path = await write_backup_file(output_dir, snaps)
+                logger.info("Periodic backup saved to %s", path)
+
+                files = sorted(output_dir.glob("backup_*.json"), reverse=True)
+                for old in files[BACKUP_RETENTION_FILES:]:
+                    try:
+                        old.unlink()
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("Periodic backup failed: %s", exc, exc_info=True)
+
+    async def _rate_limit_cleanup_loop():
+        """Periodic cleanup of old rate limiting data to prevent memory leak."""
+        while True:
+            try:
+                await asyncio.sleep(max(RATE_LIMIT_CLEANUP_INTERVAL_MIN, 1) * 60)
+                cleanup_rate_limit_data()
+                logger.debug("Rate limit data cleanup completed")
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("Rate limit cleanup failed: %s", exc)
+
+    async def _usb_watchdog_loop():
+        """
+        Watch USB license transitions and enforce auto-lock.
+
+        Rules:
+        - Track valid -> invalid transitions and publish `license_status_changed`
+        - If admin USB session is unlocked and license becomes invalid, auto-lock and publish
+          `admin_locked`
+        """
+        previous_valid: bool | None = None
+        while True:
+            try:
+                await asyncio.sleep(max(USB_WATCHDOG_INTERVAL_SEC, 1))
+                status = usb_license.check_license(force_refresh=True)
+                current_valid = bool(status.get("valid"))
+                if previous_valid is None:
+                    previous_valid = current_valid
+                elif current_valid != previous_valid:
+                    await license_events.publish(
+                        "license_status_changed",
+                        {
+                            "valid": current_valid,
+                            "reason": status.get("reason"),
+                            "mountpoint": status.get("mountpoint"),
+                            "checked_at": status.get("checked_at"),
+                        },
+                    )
+                    previous_valid = current_valid
+
+                admin_license_status = admin_license.check_admin_license()
+                override_active = recovery_codes.is_override_active()
+                should_lock_unlocked_session = (
+                    not current_valid and not override_active
+                ) or not admin_license_status.get("valid")
+                if should_lock_unlocked_session and await admin_session.is_unlocked():
+                    locked = await admin_session.lock()
+                    if locked:
+                        lock_reason = (
+                            "admin_license_invalid"
+                            if not admin_license_status.get("valid")
+                            else "license_invalid"
+                        )
+                        await license_events.publish(
+                            "admin_locked",
+                            {
+                                "reason": lock_reason,
+                                "license_reason": status.get("reason"),
+                                "admin_license_reason": admin_license_status.get(
+                                    "reason"
+                                ),
+                            },
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("USB watchdog failed: %s", exc)
+
+    # Start background tasks if enabled (interval > 0).
+    global backup_task, rate_limit_cleanup_task, usb_watchdog_task
+    if BACKUP_INTERVAL_MIN > 0:
+        backup_task = asyncio.create_task(_backup_loop())
+    else:
+        backup_task = None
+
+    if RATE_LIMIT_CLEANUP_INTERVAL_MIN > 0:
+        rate_limit_cleanup_task = asyncio.create_task(_rate_limit_cleanup_loop())
+    else:
+        rate_limit_cleanup_task = None
+
+    if USB_WATCHDOG_INTERVAL_SEC > 0:
+        usb_watchdog_task = asyncio.create_task(_usb_watchdog_loop())
+    else:
+        usb_watchdog_task = None
+
+    yield
+
+    # -------------------- Shutdown --------------------
+    # Cancel background tasks to ensure a graceful shutdown (no dangling loops).
+    logger.info("🛑 Escalada API shutting down...")
+    if backup_task:
+        backup_task.cancel()
+        try:
+            await backup_task
+        except asyncio.CancelledError:
+            pass
+
+    if rate_limit_cleanup_task:
+        rate_limit_cleanup_task.cancel()
+        try:
+            await rate_limit_cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    if usb_watchdog_task:
+        usb_watchdog_task.cancel()
+        try:
+            await usb_watchdog_task
+        except asyncio.CancelledError:
+            pass
+
+
+# -------------------- FastAPI app --------------------
+app = FastAPI(
+    title="Escalada Control Panel API",
+    lifespan=lifespan,
+)
+
+# -------------------- CORS --------------------
+# Default origins cover local dev + typical LAN deployments; can be overridden via env vars.
+DEFAULT_ORIGINS = (
+    "http://localhost:5173,http://localhost:3000,http://192.168.100.205:5173"
+)
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS).split(",")
+
+# Regex allows *.local and common private LAN IP ranges (useful for phones/tablets/TV browsers).
+DEFAULT_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|[a-zA-Z0-9-]+\.local|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$"
+ALLOWED_ORIGIN_REGEX = os.getenv("ALLOWED_ORIGIN_REGEX", DEFAULT_ORIGIN_REGEX)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount(
+    "/assets",
+    StaticFiles(directory=str(FRONTEND_ASSETS_DIR), check_dir=False),
+    name="frontend-assets",
+)
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    # Lightweight access log with timing; errors include stack traces for debugging.
+    start_time = time()
+
+    logger.info(
+        "%s %s - Client: %s",
+        request.method,
+        request.url.path,
+        request.client.host if request.client else "unknown",
+    )
+
+    try:
+        response = await call_next(request)
+        process_time = time() - start_time
+        logger.info(
+            "%s %s - Status: %s - Duration: %.3fs",
+            request.method,
+            request.url.path,
+            response.status_code,
+            process_time,
+        )
+        return response
+    except Exception as exc:
+        process_time = time() - start_time
+        logger.error(
+            "%s %s - Error: %s - Duration: %.3fs",
+            request.method,
+            request.url.path,
+            str(exc),
+            process_time,
+            exc_info=True,
+        )
+        raise
+
+
+@app.get("/health")
+async def health():
+    # Minimal liveness probe used by local tooling / reverse proxies.
+    return {"status": "ok", "storage": "json"}
+
+
+@app.get("/status/summary")
+async def status_summary():
+    # Human-friendly status endpoint (useful during events for quick sanity checks).
+    return {
+        "competitions": 0,
+        "boxes": len(live_module.state_map),
+        "events": 0,
+        "last_event_at": None,
+        "storage": "json",
+    }
+
+
+@app.get("/api/runtime")
+async def runtime_info(request: Request):
+    state = runtime_state.get_runtime()
+    selected_port = (
+        state.get("port")
+        or request.url.port
+        or int(os.getenv("ESCALADA_RUNTIME_PORT", "8000"))
+    )
+    bind_host = state.get("host") or os.getenv("ESCALADA_RUNTIME_HOST", "0.0.0.0")
+    request_host = request.headers.get("host", "")
+    base_url = state.get("base_url")
+    if not base_url:
+        if request_host:
+            base_url = f"{request.url.scheme}://{request_host}"
+        else:
+            base_url = f"{request.url.scheme}://{bind_host}:{selected_port}"
+
+    return {
+        "host": bind_host,
+        "port": int(selected_port),
+        "base_url": base_url,
+        "paths": runtime_paths.describe_runtime_paths(),
+    }
+
+
+# -------------------- Router registration --------------------
+# Public/API routers
+app.include_router(upload_router, prefix="/api")
+app.include_router(save_ranking_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(live_router, prefix="/api")
+app.include_router(public_router, prefix="/api")
+app.include_router(podium_router, prefix="/api")
+app.include_router(health_router, prefix="/api")
+app.include_router(license_router, prefix="/api")
+
+# Admin routers (restricted endpoints)
+app.include_router(backup_router, prefix="/api/admin")
+app.include_router(audit_router, prefix="/api/admin")
+app.include_router(ops_router, prefix="/api/admin")
+
+
+@app.get("/", include_in_schema=False)
+async def spa_root():
+    if FRONTEND_INDEX_FILE.exists():
+        return FileResponse(FRONTEND_INDEX_FILE)
+    raise HTTPException(status_code=404, detail="frontend_not_built")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_fallback(full_path: str):
+    request_path = f"/{full_path.lstrip('/')}" if full_path else "/"
+    if _is_spa_excluded(request_path):
+        raise HTTPException(status_code=404, detail="not_found")
+
+    maybe_file = _resolve_frontend_file(full_path)
+    if maybe_file:
+        return FileResponse(maybe_file)
+
+    if FRONTEND_INDEX_FILE.exists():
+        return FileResponse(FRONTEND_INDEX_FILE)
+
+    raise HTTPException(status_code=404, detail="frontend_not_built")

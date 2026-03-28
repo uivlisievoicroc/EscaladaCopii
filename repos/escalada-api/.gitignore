@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+# Runtime artifacts
+data/
+backups/
+uploads/
+output/
+coverage.xml
+
+dist/
+build/
+*.egg-info/
+
+# Frontend bundle copied for packaging
+frontend_dist/
+
+# Editor artifacts
+.vscode/
+.idea/
