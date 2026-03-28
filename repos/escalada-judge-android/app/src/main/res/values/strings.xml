@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--suppress SpellCheckingInspection -->
+    <string name="app_name">Escalada Judge Remote</string>
+    <string name="subtitle">Native Android shell for the web judge page.</string>
+    <string name="welcome_title">Welcome</string>
+    <string name="welcome_subtitle">Connect to your judge station to start scoring.\nScan a QR code or enter the judge URL manually</string>
+    <string name="welcome_scan_qr_button">Scan QR code</string>
+    <string name="welcome_enter_url_button">Enter URL</string>
+    <string name="url_hint">Judge URL, for example 192.168.1.50:8000/#/judge/0</string>
+    <string name="dialog_enter_url_title">Enter judge URL</string>
+    <string name="dialog_connect_button">Connect</string>
+    <string name="scan_qr_prompt">Scan a judge station QR code</string>
+    <string name="status_loading">Loading judge page...</string>
+    <string name="status_ready">Judge page ready. Volume keys are armed.</string>
+    <string name="status_error">Page error: %1$s</string>
+    <string name="status_error_unknown">unknown error</string>
+    <string name="status_sent_half_hold">Sent shortcut: +0.1 Hold</string>
+    <string name="status_sent_hold">Sent shortcut: +1 Hold</string>
+    <string name="toast_invalid_url">Enter a valid http/https judge URL.</string>
+    <string name="toast_invalid_qr_url">Scanned code does not contain a valid judge URL.</string>
+    <string name="toast_missing_scanner_app">No compatible QR scanner app is installed on this device.</string>
+    <string name="toast_no_judge_url_selected">No judge URL selected. Returning to welcome.</string>
+    <string name="toast_page_not_ready">Judge page is not ready yet.</string>
+</resources>
