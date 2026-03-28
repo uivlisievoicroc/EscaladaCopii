@@ -1,0 +1,36 @@
+import { fetchWithRetry } from './fetch';
+import {
+  getAdminSecurityHeaders,
+  handleAdminSecurityErrorResponse,
+} from './adminSecurityService';
+
+const API_BASE = '/api/admin';
+
+/**
+ * @typedef {Object} FetchAuditEventsOptions
+ * @property {number | null | undefined} [boxId]
+ * @property {number} [limit]
+ * @property {boolean} [includePayload]
+ */
+
+/**
+ * @param {FetchAuditEventsOptions} [options]
+ */
+export async function fetchAuditEvents({ boxId, limit = 200, includePayload = false } = {}) {
+  const params = new URLSearchParams();
+  if (boxId !== undefined && boxId !== null && boxId !== '') params.set('boxId', String(boxId));
+  if (limit) params.set('limit', String(limit));
+  if (includePayload) params.set('includePayload', '1');
+
+  const res = await fetchWithRetry(`${API_BASE}/audit/events?${params.toString()}`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: getAdminSecurityHeaders(),
+  });
+  if (!res.ok) {
+    await handleAdminSecurityErrorResponse(res);
+    const text = await res.text();
+    throw new Error(text || `Audit fetch failed (${res.status})`);
+  }
+  return res.json();
+}
