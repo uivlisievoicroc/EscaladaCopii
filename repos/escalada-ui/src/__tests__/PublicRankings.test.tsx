@@ -93,7 +93,7 @@ describe('PublicRankings TB interactive badges', () => {
         send: vi.fn(),
         close: vi.fn(),
       };
-    });
+    }) as unknown as typeof WebSocket;
   });
 
   afterEach(() => {

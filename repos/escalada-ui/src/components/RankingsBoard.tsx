@@ -169,7 +169,7 @@ export const normalizeBox = (box: PublicBox): PublicBox => ({
  * - Input: null → Output: "--:--"
  */
 const formatSeconds = (sec: number | null | undefined): string => {
-  if (!Number.isFinite(sec) || sec < 0) return '--:--';
+  if (typeof sec !== 'number' || !Number.isFinite(sec) || sec < 0) return '--:--';
   const total = Math.trunc(sec);
   const m = Math.floor(total / 60)
     .toString()

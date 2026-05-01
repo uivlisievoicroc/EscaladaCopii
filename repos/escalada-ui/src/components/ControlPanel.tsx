@@ -1164,7 +1164,7 @@ const ControlPanel: FC = () => {
     try {
       setTimeTiebreakDecisionBusy(true);
       setTimeTiebreakDecisionError(null);
-      await setPrevRoundsTiebreakDecisionApi(
+      await (setPrevRoundsTiebreakDecisionApi as (...args: any[]) => Promise<unknown>)(
         activeTimeTiebreakPrompt.boxId,
         decision,
         activeTimeTiebreakPrompt.fingerprint,

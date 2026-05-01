@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -10,7 +11,7 @@ from typing import Any, Dict, List
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from escalada.api import live
 from escalada.api.official_export import build_official_results_zip, safe_zip_component
@@ -260,40 +261,95 @@ async def export_official_results_zip(box_id: int, claims=Depends(require_admin_
     )
 
 
+MAX_RESTORE_SNAPSHOTS = 50
+RESTORE_PUBLIC_UPDATE_TYPE = "BOX_STATUS_UPDATE"
+
+
+class RestoreSnapshot(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    boxId: int = Field(ge=0, le=9999)
+    initiated: bool | None = None
+    holdsCount: int | float | None = None
+    holdsCounts: list[int] | None = None
+    routeIndex: int | None = None
+    routesCount: int | None = None
+    currentClimber: str | None = None
+    started: bool | None = None
+    timerState: str | None = None
+    holdCount: int | float | None = None
+    competitors: list[dict[str, Any]] | None = None
+    categorie: str | None = None
+    registeredTime: int | float | None = None
+    remaining: int | float | None = None
+    timerPreset: str | None = None
+    timerPresetSec: int | float | None = None
+    scores: dict[str, Any] | None = None
+    times: dict[str, Any] | None = None
+    timeCriterionEnabled: bool | None = None
+    sessionId: str | None = None
+    boxVersion: int | None = None
+
+
 class RestoreRequest(BaseModel):
-    snapshots: List[Dict[str, Any]]
+    snapshots: List[RestoreSnapshot]
     box_ids: List[int] | None = None
 
+    @field_validator("snapshots")
+    @classmethod
+    def _validate_snapshots_count(cls, value: List[RestoreSnapshot]) -> List[RestoreSnapshot]:
+        if len(value) > MAX_RESTORE_SNAPSHOTS:
+            raise ValueError("too_many_snapshots")
+        return value
 
-def _state_from_backup_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    @field_validator("box_ids")
+    @classmethod
+    def _validate_box_ids(cls, value: List[int] | None) -> List[int] | None:
+        if value is None:
+            return value
+        if len(value) > MAX_RESTORE_SNAPSHOTS:
+            raise ValueError("too_many_box_ids")
+        if any(box_id < 0 or box_id > 9999 for box_id in value):
+            raise ValueError("invalid_box_id")
+        return value
+
+
+def _snapshot_data(snapshot: RestoreSnapshot | Dict[str, Any]) -> Dict[str, Any]:
+    if isinstance(snapshot, RestoreSnapshot):
+        return snapshot.model_dump()
+    return dict(snapshot)
+
+
+def _state_from_backup_snapshot(snapshot: RestoreSnapshot | Dict[str, Any]) -> Dict[str, Any]:
     """Convert backup snapshot back into internal live state shape."""
+    snapshot_data = _snapshot_data(snapshot)
 
-    session_id = snapshot.get("sessionId")
-    box_version = snapshot.get("boxVersion", 0) or 0
+    session_id = snapshot_data.get("sessionId")
+    box_version = snapshot_data.get("boxVersion", 0) or 0
 
     state = live._default_state(session_id)
     state.update(
         {
-            "initiated": bool(snapshot.get("initiated", False)),
-            "holdsCount": snapshot.get("holdsCount", 0) or 0,
-            "routeIndex": snapshot.get("routeIndex", 1) or 1,
-            "routesCount": snapshot.get("routesCount")
-            or snapshot.get("routes_count")
+            "initiated": bool(snapshot_data.get("initiated", False)),
+            "holdsCount": snapshot_data.get("holdsCount", 0) or 0,
+            "routeIndex": snapshot_data.get("routeIndex", 1) or 1,
+            "routesCount": snapshot_data.get("routesCount")
+            or snapshot_data.get("routes_count")
             or 1,
-            "holdsCounts": snapshot.get("holdsCounts") or [],
-            "currentClimber": snapshot.get("currentClimber", "") or "",
-            "started": bool(snapshot.get("started", False)),
-            "timerState": snapshot.get("timerState", "idle") or "idle",
-            "holdCount": snapshot.get("holdCount", 0.0) or 0.0,
-            "competitors": snapshot.get("competitors", []) or [],
-            "categorie": snapshot.get("categorie", "") or "",
-            "lastRegisteredTime": snapshot.get("registeredTime"),
-            "remaining": snapshot.get("remaining"),
-            "timerPreset": snapshot.get("timerPreset"),
-            "timerPresetSec": snapshot.get("timerPresetSec"),
-            "scores": snapshot.get("scores") or {},
-            "times": snapshot.get("times") or {},
-            "timeCriterionEnabled": snapshot.get("timeCriterionEnabled"),
+            "holdsCounts": snapshot_data.get("holdsCounts") or [],
+            "currentClimber": snapshot_data.get("currentClimber", "") or "",
+            "started": bool(snapshot_data.get("started", False)),
+            "timerState": snapshot_data.get("timerState", "idle") or "idle",
+            "holdCount": snapshot_data.get("holdCount", 0.0) or 0.0,
+            "competitors": snapshot_data.get("competitors", []) or [],
+            "categorie": snapshot_data.get("categorie", "") or "",
+            "lastRegisteredTime": snapshot_data.get("registeredTime"),
+            "remaining": snapshot_data.get("remaining"),
+            "timerPreset": snapshot_data.get("timerPreset"),
+            "timerPresetSec": snapshot_data.get("timerPresetSec"),
+            "scores": snapshot_data.get("scores") or {},
+            "times": snapshot_data.get("times") or {},
+            "timeCriterionEnabled": snapshot_data.get("timeCriterionEnabled"),
             "sessionId": session_id or state.get("sessionId"),
             "boxVersion": box_version,
         }
@@ -301,34 +357,67 @@ def _state_from_backup_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+def _normalize_restore_snapshots(
+    snapshots: List[RestoreSnapshot | Dict[str, Any]],
+) -> list[RestoreSnapshot]:
+    if len(snapshots) > MAX_RESTORE_SNAPSHOTS:
+        raise ValueError("too_many_snapshots")
+    normalized: list[RestoreSnapshot] = []
+    for snapshot in snapshots:
+        if isinstance(snapshot, RestoreSnapshot):
+            normalized.append(snapshot)
+        else:
+            normalized.append(RestoreSnapshot.model_validate(snapshot))
+    return normalized
+
+
+async def _get_live_box_lock(box_id: int) -> asyncio.Lock:
+    async with live.init_lock:
+        lock = live.state_locks.get(box_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            live.state_locks[box_id] = lock
+        return lock
+
+
 async def restore_snapshots_json(
-    snapshots: List[Dict[str, Any]],
+    snapshots: List[RestoreSnapshot | Dict[str, Any]],
     *,
     box_ids: List[int] | None = None,
 ) -> list[int]:
+    normalized_snapshots = _normalize_restore_snapshots(snapshots)
+    if box_ids is not None:
+        if len(box_ids) > MAX_RESTORE_SNAPSHOTS or any(
+            box_id < 0 or box_id > 9999 for box_id in box_ids
+        ):
+            raise ValueError("invalid_box_ids")
+    allowed_box_ids = set(box_ids or [])
     restored: list[int] = []
-    for snap in snapshots:
-        box_id = snap.get("boxId")
-        if box_id is None:
-            continue
-        if box_ids and box_id not in box_ids:
+    for snap in normalized_snapshots:
+        box_id = snap.boxId
+        if allowed_box_ids and box_id not in allowed_box_ids:
             continue
 
         state = _state_from_backup_snapshot(snap)
-        async with live.init_lock:
-            live.state_map[int(box_id)] = state
-            live.state_locks[int(box_id)] = live.state_locks.get(int(box_id)) or asyncio.Lock()
-        await save_box_state(int(box_id), state)
-        restored.append(int(box_id))
+        lock = await _get_live_box_lock(box_id)
+        async with lock:
+            live.state_map[box_id] = state
+            await save_box_state(box_id, state)
+        await live._send_state_snapshot(box_id)
+        await live._broadcast_public_box_update(box_id, RESTORE_PUBLIC_UPDATE_TYPE)
+        restored.append(box_id)
     return restored
 
 
 @router.post("/restore")
 async def restore_backup(payload: RestoreRequest, claims=Depends(require_admin_action)):
-    restored = await restore_snapshots_json(
-        payload.snapshots,
-        box_ids=payload.box_ids,
-    )
+    try:
+        restored = await restore_snapshots_json(
+            payload.snapshots,
+            box_ids=payload.box_ids,
+        )
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     return {"status": "ok", "restored": restored}
 
 
@@ -345,9 +434,15 @@ async def write_backup_file(output_dir: Path, snapshots: List[Dict[str, Any]]) -
     """Persist snapshots to a JSON file on disk."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    path = output_dir / f"backup_{ts}.json"
-    path.write_text(json.dumps({"snapshots": snapshots}, ensure_ascii=False, indent=2))
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
+    suffix = uuid.uuid4().hex[:8]
+    path = output_dir / f"backup_{ts}_{suffix}.json"
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps({"snapshots": snapshots}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp_path, path)
     return path
 
 

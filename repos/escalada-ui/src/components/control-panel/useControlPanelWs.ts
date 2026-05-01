@@ -1,9 +1,10 @@
 import { backoffDelayMs, parseWsJson, replyPong } from '../../utilis/wsClient';
+import type { WebSocketMessage } from '../../types';
 
 type WsOptions = {
   idx: number;
   url: string;
-  onMessage: (msg: Record<string, any>) => void;
+  onMessage: (msg: WebSocketMessage) => void;
   onClosed?: () => void;
   onReconnectRequested: () => void;
   shouldReconnect: () => boolean;
@@ -55,7 +56,7 @@ export const connectControlPanelWs = ({
       replyPong(ws, msg.timestamp);
       return;
     }
-    onMessage(msg);
+    onMessage(msg as WebSocketMessage);
   };
 
   ws.onerror = (err) => {

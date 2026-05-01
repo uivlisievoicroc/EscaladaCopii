@@ -208,6 +208,80 @@ def test_reset_box_generates_new_session_and_clears_state():
     assert outcome.state["timerPreset"] is None
 
 
+def test_reset_box_clears_route_timer_score_and_tiebreak_state():
+    state = default_state("sid-reset-stale")
+    state.update(
+        {
+            "initiated": True,
+            "categorie": "Cat",
+            "routesCount": 3,
+            "holdsCounts": [10, 11, 12],
+            "routeIndex": 3,
+            "holdsCount": 12,
+            "holdCount": 6.5,
+            "timerState": "running",
+            "started": True,
+            "remaining": 42.0,
+            "timerEndsAtMs": 123456,
+            "timerRemainingSec": 42,
+            "timerPreset": "05:00",
+            "timerPresetSec": 300,
+            "currentClimber": "Alex",
+            "preparingClimber": "Mara",
+            "competitors": [{"nume": "Alex", "marked": False}],
+            "scores": {"Alex": [8]},
+            "times": {"Alex": [12.3]},
+            "lastRegisteredTime": 12.3,
+            "timeTiebreakPreference": "time",
+            "timeTiebreakDecisions": {"x": "y"},
+            "timeTiebreakResolvedFingerprint": "fp",
+            "timeTiebreakResolvedDecision": {"winner": "Alex"},
+            "prevRoundsTiebreakPreference": "manual",
+            "prevRoundsTiebreakDecisions": {"x": "y"},
+            "prevRoundsTiebreakOrders": {"x": ["Alex"]},
+            "prevRoundsTiebreakRanks": {"Alex": 1},
+            "prevRoundsTiebreakLineageRanks": {"Alex": [1]},
+            "prevRoundsTiebreakResolvedFingerprint": "prev-fp",
+            "prevRoundsTiebreakResolvedDecision": {"winner": "Alex"},
+            "leadRankingRows": [{"name": "Alex"}],
+            "leadTieEvents": [{"type": "tie"}],
+        }
+    )
+
+    old_session = state["sessionId"]
+    outcome = apply_command(state, {"type": "RESET_BOX"})
+    st = outcome.state
+
+    assert st["sessionId"] != old_session
+    assert st["initiated"] is False
+    assert st["categorie"] == ""
+    assert st["routesCount"] == 1
+    assert st["routeIndex"] == 1
+    assert st["holdsCount"] == 0
+    assert st["holdsCounts"] == []
+    assert st["holdCount"] == 0.0
+    assert st["timerState"] == "idle"
+    assert st["started"] is False
+    assert st["remaining"] is None
+    assert st["timerEndsAtMs"] is None
+    assert st["timerRemainingSec"] is None
+    assert st["currentClimber"] == ""
+    assert st["preparingClimber"] == ""
+    assert st["competitors"] == []
+    assert st["scores"] == {}
+    assert st["times"] == {}
+    assert st["lastRegisteredTime"] is None
+    assert st["timeTiebreakPreference"] is None
+    assert st["timeTiebreakDecisions"] == {}
+    assert st["prevRoundsTiebreakPreference"] is None
+    assert st["prevRoundsTiebreakDecisions"] == {}
+    assert st["prevRoundsTiebreakOrders"] == {}
+    assert st["prevRoundsTiebreakRanks"] == {}
+    assert st["prevRoundsTiebreakLineageRanks"] == {}
+    assert st.get("leadRankingRows", []) == []
+    assert st.get("leadTieEvents", []) == []
+
+
 def test_reset_partial_unmark_all_restarts_box_competition():
     state = default_state("sid-rp")
     old_session = state["sessionId"]

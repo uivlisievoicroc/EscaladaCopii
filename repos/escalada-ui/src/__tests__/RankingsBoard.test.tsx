@@ -71,10 +71,10 @@ describe('RankingsBoard score display', () => {
       />,
     );
 
-    const anaRow = screen.getByText('Ana').closest('div[class*="grid"]');
-    const bobRow = screen.getByText('Bob').closest('div[class*="grid"]');
-    const caraRow = screen.getByText('Cara').closest('div[class*="grid"]');
-    const danRow = screen.getByText('Dan').closest('div[class*="grid"]');
+    const anaRow = screen.getByText('Ana').closest('div[class*="grid"]') as HTMLElement | null;
+    const bobRow = screen.getByText('Bob').closest('div[class*="grid"]') as HTMLElement | null;
+    const caraRow = screen.getByText('Cara').closest('div[class*="grid"]') as HTMLElement | null;
+    const danRow = screen.getByText('Dan').closest('div[class*="grid"]') as HTMLElement | null;
 
     expect(anaRow).not.toBeNull();
     expect(bobRow).not.toBeNull();

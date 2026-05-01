@@ -1,11 +1,19 @@
 import React, { FC } from 'react';
 import ModalUpload from '../ModalUpload';
+import type { Competitor } from '../../types';
+
+type UploadedListbox = {
+  categorie: string;
+  concurenti: Competitor[];
+  routesCount?: number | string;
+  holdsCounts?: Array<number | string>;
+};
 
 type Props = {
   isOpen: boolean;
   disabled: boolean;
   onClose: () => void;
-  onUpload: (file: File, category: string, routesCount?: number, holdsCounts?: number[]) => void;
+  onUpload: (data: UploadedListbox) => void;
 };
 
 const ControlPanelUploadSection: FC<Props> = ({ isOpen, disabled, onClose, onUpload }) => (

@@ -75,7 +75,7 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
         CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(binding.webView, true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(binding.webView, false)
 
         binding.webView.settings.apply {
             javaScriptEnabled = true
@@ -113,7 +113,13 @@ class MainActivity : AppCompatActivity() {
             override fun shouldOverrideUrlLoading(
                 view: WebView?,
                 request: WebResourceRequest?,
-            ): Boolean = false
+            ): Boolean {
+                if (request?.isForMainFrame != true) return false
+                val nextUrl = request.url?.toString().orEmpty()
+                if (isAcceptableJudgeUrl(nextUrl)) return false
+                Toast.makeText(this@MainActivity, R.string.toast_invalid_url, Toast.LENGTH_SHORT).show()
+                return true
+            }
 
             override fun onReceivedError(
                 view: WebView?,

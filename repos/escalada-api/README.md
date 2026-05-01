@@ -49,6 +49,8 @@ Admin endpoints no longer use username/password login.
 
 Do not expose the API publicly without network protections (reverse proxy allowlists, VPN, firewall), because trusted IPs bypass admin login.
 
+V1 hardening intentionally keeps this trusted-IP behavior unchanged. Treat it as an operational boundary: run the API only in a controlled LAN until the admin bootstrap/auth model is redesigned.
+
 ## Admin Security (USB + Emergency Recovery + Offline License)
 
 Admin actions use Policy A:
@@ -149,7 +151,16 @@ poetry run pytest tests -q
 - Backup JSON (single box): `GET /api/admin/backup/box/{boxId}`
 - Backup JSON (all boxes): `GET /api/admin/backup/full`
 - Restore din backup: `POST /api/admin/restore` cu payload `{"snapshots":[...]}`
+- Restore validates the full payload before applying changes, supports at most 50 snapshots per request, and avoids partial restore on validation errors.
 - Periodic backups: controlate de `BACKUP_INTERVAL_MIN`, `BACKUP_RETENTION_FILES`, `BACKUP_DIR`
+
+## Upload limits
+
+- Listbox uploads accept only `.xlsx`.
+- Default max upload size: 5 MiB (`UPLOAD_MAX_BYTES`).
+- Max rows read: 1000.
+- Max accepted competitors: 500.
+- `routesCount` must match the length of `holdsCounts`, and all hold counts must be positive.
 
 ## CI notes
 

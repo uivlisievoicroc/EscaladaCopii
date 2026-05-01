@@ -17,13 +17,30 @@ import { debugWarn, debugError } from './debug';
  * @returns {Promise<Response>} Fetch response or timeout error
  * @throws {Error} If timeout is exceeded
  */
-export const fetchWithTimeout = (url, options = {}, timeout = 5000) => {
-  return Promise.race([
-    fetch(url, options),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Request timeout after ${timeout}ms`)), timeout),
-    ),
-  ]);
+export const fetchWithTimeout = async (url, options = {}, timeout = 5000) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const externalSignal = options.signal;
+
+  if (externalSignal?.aborted) {
+    controller.abort();
+  } else if (externalSignal) {
+    externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`Request timeout after ${timeout}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 };
 
 // ==================== RETRY WRAPPER ====================

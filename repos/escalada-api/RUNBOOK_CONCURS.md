@@ -20,6 +20,7 @@ poetry run uvicorn escalada.main:app --host 0.0.0.0 --port 8000 --workers 1
 - `JWT_SECRET`: dacă lipsește, API folosește un default (inacceptabil în producție). Setează un secret puternic în `.env` sau environment.
 - `ALLOWED_ORIGINS`: listă separată prin virgulă cu origin‑urile UI permise (ex. `http://192.168.1.223:5173`).
 - `ALLOWED_ORIGIN_REGEX`: alternativ/în plus, regex pentru origin‑uri (implicit permite `192.168.*.*` și `10.*.*.*`).
+- În V1, mecanismul `ADMIN_TRUSTED_IPS` și payload-ul WebSocket public rămân neschimbate. Nu expune API-ul prin reverse proxy public; rulează în LAN controlat, cu firewall/VPN dacă există orice acces extern.
 
 ## Reset demo (opțional)
 
@@ -36,3 +37,5 @@ poetry run uvicorn escalada.main:app --host 0.0.0.0 --port 8000 --workers 1
 
 - Backup (all): `GET /api/admin/backup/full`
 - Restore: `POST /api/admin/restore` (cu payload `{"snapshots":[...]}`)
+- Restore acceptă maxim 50 snapshot-uri/request și validează payload-ul înainte de aplicare. Dacă payload-ul este invalid, nu se aplică restaurare parțială.
+- Upload listbox acceptă doar `.xlsx`, maxim 5 MiB implicit (`UPLOAD_MAX_BYTES`), maxim 1000 rânduri citite și maxim 500 concurenți.

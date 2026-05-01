@@ -75,11 +75,15 @@ def apply_reset_box(new_state: dict[str, Any]) -> bool:
     new_state["preparingClimber"] = ""
     new_state["started"] = False
     new_state["timerState"] = "idle"
+    new_state["holdsCount"] = 0
     new_state["holdCount"] = 0.0
     new_state["lastRegisteredTime"] = None
     new_state["remaining"] = None
+    new_state["timerRemainingSec"] = None
+    new_state["timerEndsAtMs"] = None
     new_state["scores"] = {}
     new_state["times"] = {}
+    new_state["routeIndex"] = 1
     new_state["routesCount"] = 1
     new_state["holdsCounts"] = []
     new_state["competitors"] = []
@@ -97,6 +101,7 @@ def apply_reset_box(new_state: dict[str, Any]) -> bool:
     new_state["prevRoundsTiebreakOrders"] = {}
     new_state["prevRoundsTiebreakRanks"] = {}
     new_state["prevRoundsTiebreakLineageRanks"] = {}
+    new_state["leadRankingRows"] = []
+    new_state["leadTieEvents"] = []
     new_state["sessionId"] = str(uuid.uuid4())
     return True
-

@@ -6,6 +6,7 @@ import { computeFrontendBuildInfo, writeFrontendBuildInfo } from './build/buildI
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const buildInfo = computeFrontendBuildInfo(rootDir);
+const exposeLanDevServer = process.env.VITE_DEV_EXPOSE_LAN === 'true';
 
 const frontendBuildInfoPlugin = () => {
   let outDir = resolve(rootDir, 'dist');
@@ -27,6 +28,6 @@ export default defineConfig({
     __ESCALADA_BUILD_SOURCE_HASH__: JSON.stringify(buildInfo.sourceHash),
     __ESCALADA_BUILD_VERSION__: JSON.stringify(buildInfo.version),
   },
-  server: { host: true },
+  server: { host: exposeLanDevServer ? true : 'localhost' },
   plugins: [react(), frontendBuildInfoPlugin()],
 });

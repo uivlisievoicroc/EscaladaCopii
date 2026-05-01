@@ -88,7 +88,7 @@ export async function postCmd<T = any>(
       body: JSON.stringify(body),
     },
     commandType,
-    options,
+    { retries: 1, ...options },
   );
 }
 

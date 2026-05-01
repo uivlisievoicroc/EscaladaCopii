@@ -97,6 +97,141 @@ def test_upload_invalid_holds_counts_returns_422(monkeypatch):
     assert res.json()["detail"] == "invalid_holds_counts"
 
 
+def test_upload_rejects_holds_counts_that_do_not_match_routes_count(monkeypatch):
+    client = TestClient(app)
+    headers = _unlock_headers(client, monkeypatch)
+    payload = _xlsx_bytes([("Alex", "Club A")])
+
+    res = client.post(
+        "/api/admin/upload",
+        data={
+            "category": "Cat",
+            "routesCount": "2",
+            "holdsCounts": "[10]",
+            "include_clubs": "true",
+        },
+        files={
+            "file": (
+                "list.xlsx",
+                payload,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        headers=headers,
+    )
+
+    assert res.status_code == 422
+    assert res.json()["detail"] == "invalid_holds_counts"
+
+
+def test_upload_rejects_non_positive_hold_counts(monkeypatch):
+    client = TestClient(app)
+    headers = _unlock_headers(client, monkeypatch)
+    payload = _xlsx_bytes([("Alex", "Club A")])
+
+    res = client.post(
+        "/api/admin/upload",
+        data={
+            "category": "Cat",
+            "routesCount": "1",
+            "holdsCounts": "[0]",
+            "include_clubs": "true",
+        },
+        files={
+            "file": (
+                "list.xlsx",
+                payload,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        headers=headers,
+    )
+
+    assert res.status_code == 422
+    assert res.json()["detail"] == "invalid_holds_counts"
+
+
+def test_upload_rejects_blank_category(monkeypatch):
+    client = TestClient(app)
+    headers = _unlock_headers(client, monkeypatch)
+    payload = _xlsx_bytes([("Alex", "Club A")])
+
+    res = client.post(
+        "/api/admin/upload",
+        data={
+            "category": "   ",
+            "routesCount": "1",
+            "holdsCounts": "[10]",
+            "include_clubs": "true",
+        },
+        files={
+            "file": (
+                "list.xlsx",
+                payload,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        headers=headers,
+    )
+
+    assert res.status_code == 422
+    assert res.json()["detail"] == "invalid_category"
+
+
+def test_upload_rejects_large_files_before_parsing(monkeypatch):
+    client = TestClient(app)
+    headers = _unlock_headers(client, monkeypatch)
+    payload = b"x" * (5 * 1024 * 1024 + 1)
+
+    res = client.post(
+        "/api/admin/upload",
+        data={
+            "category": "Cat",
+            "routesCount": "1",
+            "holdsCounts": "[10]",
+            "include_clubs": "true",
+        },
+        files={
+            "file": (
+                "list.xlsx",
+                payload,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        headers=headers,
+    )
+
+    assert res.status_code == 413
+    assert res.json()["detail"] == "file_too_large"
+
+
+def test_upload_rejects_legacy_xls_mime(monkeypatch):
+    client = TestClient(app)
+    headers = _unlock_headers(client, monkeypatch)
+    payload = _xlsx_bytes([("Alex", "Club A")])
+
+    res = client.post(
+        "/api/admin/upload",
+        data={
+            "category": "Cat",
+            "routesCount": "1",
+            "holdsCounts": "[10]",
+            "include_clubs": "true",
+        },
+        files={
+            "file": (
+                "list.xls",
+                payload,
+                "application/vnd.ms-excel",
+            )
+        },
+        headers=headers,
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "unsupported_file_type"
+
+
 def test_upload_keeps_competitor_without_club_when_include_clubs_false(monkeypatch):
     client = TestClient(app)
     headers = _unlock_headers(client, monkeypatch)

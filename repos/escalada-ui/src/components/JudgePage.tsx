@@ -891,7 +891,8 @@ const JudgePage: FC = () => {
     if (!authActive || isInitialLoading || showLogin || showScoreModal) return;
 
     const handleJudgeShortcut = (event: KeyboardEvent): void => {
-      const action = resolveJudgeShortcutAction(event.key);
+      const action =
+        resolveJudgeShortcutAction(event.key) || resolveJudgeShortcutAction(event.code);
       if (!action) return;
 
       event.preventDefault();

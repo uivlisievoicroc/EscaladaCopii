@@ -13,6 +13,7 @@ Notes:
 
 # -------------------- Standard library imports --------------------
 import json
+import os
 from io import BytesIO
 from zipfile import BadZipFile
 
@@ -27,6 +28,20 @@ from escalada.api import live as live_module
 
 # Router is mounted under `/api/admin` (see escalada/main.py).
 router = APIRouter(tags=["upload"], prefix="/admin")
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+UPLOAD_MAX_BYTES = int(os.getenv("UPLOAD_MAX_BYTES", str(5 * 1024 * 1024)))
+UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+MAX_UPLOAD_ROWS = 1000
+MAX_UPLOAD_COMPETITORS = 500
+MAX_CATEGORY_LENGTH = 80
+
+
+def _parse_category(raw_value: str) -> str:
+    value = (raw_value or "").strip()
+    if not value or len(value) > MAX_CATEGORY_LENGTH:
+        raise HTTPException(status_code=422, detail="invalid_category")
+    return value
 
 
 def _parse_routes_count(raw_value: str) -> int:
@@ -69,7 +84,7 @@ def _parse_holds_counts(raw_value: str) -> list[int]:
             value = int(s)
         else:
             raise HTTPException(status_code=422, detail="invalid_holds_counts")
-        if value < 0:
+        if value <= 0:
             raise HTTPException(status_code=422, detail="invalid_holds_counts")
         validated.append(value)
     return validated
@@ -78,6 +93,26 @@ def _parse_holds_counts(raw_value: str) -> list[int]:
 def _parse_include_clubs(raw_value: str | None) -> bool:
     value = (raw_value or "").strip().lower()
     return value in {"1", "true", "yes", "y", "on"}
+
+
+def _validate_upload_file_type(file: UploadFile) -> None:
+    filename = (file.filename or "").strip().lower()
+    if file.content_type != XLSX_MIME or not filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="unsupported_file_type")
+
+
+async def _read_upload_limited(file: UploadFile) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > UPLOAD_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="file_too_large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.post("/upload")
@@ -98,23 +133,23 @@ async def upload_listbox(
 
     Returns a listbox object for the frontend to use immediately.
     """
-    # Basic MIME check to reject obviously wrong uploads (client-side validation is not enough).
-    if file.content_type not in (
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel",
-    ):
-        raise HTTPException(status_code=400, detail="Tip fișier neacceptat")
+    _validate_upload_file_type(file)
 
-    # Load the workbook into memory. openpyxl expects a file-like object.
-    data = await file.read()
-
+    parsed_category = _parse_category(category)
     routes_count = _parse_routes_count(routesCount)
     holds_counts_list = _parse_holds_counts(holdsCounts)
+    if len(holds_counts_list) != routes_count:
+        raise HTTPException(status_code=422, detail="invalid_holds_counts")
     include_clubs_enabled = _parse_include_clubs(include_clubs)
+    data = await _read_upload_limited(file)
 
     try:
-        wb = openpyxl.load_workbook(filename=BytesIO(data), read_only=True)
+        wb = openpyxl.load_workbook(filename=BytesIO(data), read_only=True, data_only=True)
     except BadZipFile:
+        raise HTTPException(
+            status_code=400, detail="Fișierul încărcat nu este un .xlsx valid"
+        )
+    except Exception:
         raise HTTPException(
             status_code=400, detail="Fișierul încărcat nu este un .xlsx valid"
         )
@@ -129,13 +164,18 @@ async def upload_listbox(
 
         competitors = []
         # Convention: row 1 is headers, rows 2..N are competitor data: [Name, Club, ...].
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            nume, club = row[:2]
+        for row_index, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=1):
+            if row_index > MAX_UPLOAD_ROWS:
+                raise HTTPException(status_code=422, detail="too_many_rows")
+            nume = row[0] if len(row) > 0 else None
+            club = row[1] if len(row) > 1 else None
             if not nume:
                 continue
             safe_name = str(nume).strip()
             if not safe_name:
                 continue
+            if len(competitors) >= MAX_UPLOAD_COMPETITORS:
+                raise HTTPException(status_code=422, detail="too_many_competitors")
             entry = {"nume": safe_name}
             if include_clubs_enabled and club not in (None, ""):
                 safe_club = str(club).strip()
@@ -147,7 +187,7 @@ async def upload_listbox(
 
     # Return the complete listbox object so the frontend can add it immediately.
     new_listbox = {
-        "categorie": category,
+        "categorie": parsed_category,
         "concurenti": competitors,
         "routesCount": routes_count,
         "holdsCounts": holds_counts_list,
